@@ -1,0 +1,63 @@
+[package]
+name = "seventv-helper"
+version = "0.6.0"
+edition = "2024"
+description = "7TV Emotes Helper: fetches 7TV emotes for the SevenTVEmotes World of Warcraft addon"
+build = "build.rs"
+publish = false
+
+[lib]
+name = "seventv_helper"
+path = "src/lib.rs"
+
+[[bin]]
+name = "SevenTVEmotesHelper"
+path = "src/main.rs"
+
+[dependencies]
+ab_glyph = "0.2.32"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "gif", "webp"] }
+indexmap = { version = "2", features = ["serde"] }
+log = { version = "0.4.35", features = ["std"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sysinfo = { version = "0.40.4", default-features = false, features = ["system"] }
+ureq = "3.5.2"
+
+[target."cfg(windows)".dependencies]
+windows-sys = { version = "0.61.2", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_Common",
+    "Win32_Graphics_Gdi",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
+    "Win32_System_Console",
+    "Win32_System_Com",
+    "Win32_System_Threading",
+    "Win32_Security",
+] }
+
+[build-dependencies]
+# Only used when the target is Windows (version info, icon, manifest in the .exe).
+winresource = "0.1"
+
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+# "unwind", not "abort": the background loop catches a panic in one pass and keeps running,
+# like the Python helper's try/except around each tick.
+panic = "unwind"
+strip = true
+
+# Image decoding and DXT encoding are slow unoptimised; keep tests usable.
+[profile.dev.package."*"]
+opt-level = 2
+[profile.test]
+opt-level = 1
+
+[dev-dependencies]
+image = { version = "0.25.10", default-features = false, features = ["png", "gif", "webp", "tga"] }

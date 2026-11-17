@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+helper/build/
+helper/dist/
+helper/*.spec
+tools/.cache/
+addon/SevenTVEmotes/emotes/
+helper-rs/target/
+helper-rs/dist/
+# packaged releases
+addon/*.zip

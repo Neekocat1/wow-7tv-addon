@@ -1,0 +1,10 @@
+## Interface: 16001, 120005, 120007
+## Title: |cff29b6f67TV|r Emotes - My Emotes
+## Notes: Emotes you added with /7tv. Managed by the 7TV Emotes Helper app; don't edit by hand.
+## Author: Connor
+## Version: 1
+## Category: Chat
+## Group: SevenTVEmotes
+## Dependencies: SevenTVEmotes
+
+Local.lua

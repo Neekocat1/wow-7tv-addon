@@ -1,0 +1,1 @@
+-- Written by the 7TV Emotes Helper app. Anything you change here gets overwritten.

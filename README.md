@@ -1,0 +1,173 @@
+# 7TV Emotes for WoW: Forever
+
+7TV emotes in World of Warcraft chat, with emotes added from inside the game.
+
+```
+addon/
+  SevenTVEmotes/          the addon players install (chat rendering, animation, autocomplete, /7tv)
+  SevenTVEmotes_Local/    template for the helper-managed addon (emotes the player added)
+helper-rs/                the background app (Rust): see helper-rs/README.md
+  build.bat               build SevenTVEmotesHelper.exe and the installer
+  installer/              Inno Setup script (per-user install + start with Windows)
+helper/                   the original Python helper (reference implementation, v0.5.1)
+  seventv_helper/
+  run_helper.pyw          start it from source without a console window
+  build_exe.bat           build the old PyInstaller .exe
+  requirements.txt
+tools/build_pack.py       bake emotes straight into the addon (for a pre-built release)
+tests/                    helper tests (pytest) and addon tests (Lua)
+```
+
+## How it fits together
+
+WoW addons can't download anything, so a small app on the player's PC does it. The two
+sides only talk through files:
+
+1. In game, adding an emote (window or `/7tv add <link>`) just queues it; no popup. A small
+   **7TV bar** appears above the chat box with a **Send** button. Sending reloads the UI, because WoW
+   only writes the addon's saved data to disk on `/reload` or logout. Queue as many as you like
+   first; anything still queued is also sent automatically when you log out.
+2. The helper notices the saved-settings file changed, downloads the emotes, converts them and
+   rewrites `SevenTVEmotes_Local/Local.lua`.
+3. Meanwhile the 7TV bar shows the helper's **live status**, without reloading: "Fetching 3
+   requests...", "Downloading emotes 37/412", then "12 new emotes ready - click Reload".
+   Reload then, and the emotes work and the addon reports what happened.
+
+**Live status, how:** WoW reads a texture file's contents the first time it's shown. The helper keeps
+a ring of 4,800 tiny placeholder images (`SevenTVEmotes_Local/status/`) and draws its current status
+into the next few; the addon shows a different one every 3 seconds, so the picture is never more than
+a few seconds old. The addon can't read the picture, it's just for you. `/7tv status` shows the bar on
+demand: the clock on it should tick without a reload.
+
+**Reserved slots.** WoW only sees texture files that existed when the game started; overwriting
+an existing file only needs a `/reload`. So the helper keeps ~1,500 blank placeholder textures in
+`SevenTVEmotes_Local/slots/` and writes new emotes into them. Slots created or freed while WoW is
+running are only reused after a restart; if they ever run out mid-session the player is told the
+emote will appear after restarting WoW.
+
+**Why a separate `SevenTVEmotes_Local` addon:** addon managers replace the main addon's folder on
+update. Keeping helper-written files in their own folder means updates never wipe a player's emotes.
+
+The helper also adds 7TV's global emotes, keeps channel sets up to date (every 6 hours), and
+writes a heartbeat so the addon can say "the helper isn't running" instead of failing silently.
+
+## The /7tv window
+
+Type `/7tv` to open it (`/7tv help` lists the chat commands).
+There's also a 7TV button on the minimap: left-click opens the window, right-click opens Settings,
+drag it to move it around the minimap. Hide it in Settings or with `/7tv minimap`; the window is also
+in the minimap's addon menu (the addon compartment) on clients that have one.
+
+- **Emotes**: search and filter (All / Mine / Animated / Hidden), animated previews. Click an emote to
+  see where it came from, copy its name, hide it from chat, or remove it.
+- **Add**: paste a 7tv.app link (or type a name), optionally rename it; add or remove Twitch channels.
+- **Downloads**: helper status (running / not seen recently / not installed) and every request:
+  *Not sent yet* → *In progress* → *Done* / *Failed*, plus *Retrying* when 7TV is unreachable and
+  *Needs restart* when reserved slots ran out. Cancel anything still queued.
+- **Settings**: chat options, emote size, disk usage, and **compressed emotes**.
+
+The footer always says what's pending and offers the right Reload button. While the helper is
+downloading, its tray icon shows "Downloading emotes 37/412", and Local.lua is rewritten every few
+seconds, so a reload in the middle shows what's done so far and the same count in the Downloads tab. Progress can only update
+on reload: WoW gives addons no way to read new files while the UI is running.
+
+### Compressed emotes
+
+Off by default. When turned on, the helper re-encodes every emote as a BLP texture with DXT5
+compression (WoW's own format): about 4x smaller on disk and in video memory than uncompressed TGA,
+with slightly softer colors. Each reserved slot has a `slots/sNNNN.tga` and a `cslots/sNNNN.blp`
+file, so switching only needs reloads, not a restart. (They used to sit side by side with the same
+name, and WoW appears to match texture files by name regardless of extension, so it loaded the wrong
+one; helper 0.5 moves the .blp files and rebuilds affected emotes.) Until WoW has been restarted
+after the compressed placeholders were created, new emotes are built as TGA and converted later.
+The old files are blanked once the addon has reloaded onto the new ones. (The Python helper needed
+numpy for this; the Rust helper has the encoder built in.)
+
+## For players (once the .exe is built)
+
+Run `SevenTVEmotesHelper-Setup-<version>.exe`. It installs the helper for the current user (no admin
+rights) in `%LOCALAPPDATA%\Programs\SevenTVEmotesHelper`, sets it to start with Windows and starts it.
+On its first run the helper finds WoW: Forever, installs both addons and sits in the tray.
+After that everything happens in game:
+
+| Command | |
+|---|---|
+| `/7tv add <7tv.app link>` | add one emote (`/7tv add <link> myName` to rename it) |
+| `/7tv add <name>` | add by name (most popular 7TV emote with that exact name) |
+| `/7tv channel <twitch name>` | add a streamer's 7TV emotes; `/7tv unchannel` removes them |
+| `/7tv remove <name>` | remove an emote |
+| `/7tv queue`, `/7tv helper` | pending requests, helper status |
+| `/7tv search`, `/7tv config`, `/7tv size`, `/7tv disable` | as before |
+
+Autocomplete: type `:` plus two characters; Tab cycles, another `:` accepts.
+
+## Development (Windows)
+
+The helper is the Rust program in `helper-rs/` (details in `helper-rs/README.md`):
+
+```bat
+cd helper-rs
+build.bat
+target\release\SevenTVEmotesHelper.exe --once --wow-dir "C:\Program Files (x86)\World of Warcraft"
+cargo test
+```
+
+The Python helper is kept as the reference implementation:
+
+```bat
+cd helper
+python -m pip install -r requirements.txt
+
+rem one pass in the console against your install, then exit
+python -m seventv_helper --no-tray --once --wow-dir "C:\Program Files (x86)\World of Warcraft"
+
+rem run normally (tray icon)
+python run_helper.pyw
+
+rem build the .exe (also needs: python -m pip install pyinstaller)
+build_exe.bat
+```
+
+Running from source never turns on autostart by itself; use `--autostart on|off` to test it.
+
+**Updating:** run the new installer. It asks the running helper to quit (via `quit.request` in the
+app folder), replaces the exe and starts the new one. Starting a newer exe by hand does the same
+hand-over (the old one quits, the new one takes over); an older helper never replaces a newer one.
+The Rust helper (0.6) takes over from the Python helper (0.5.x) this way, and the installer removes the
+Python helper's old copy. Helpers before 0.5 don't understand the request: quit those from the tray
+icon first.
+The helper's own files (config, log, download cache) are in `%LOCALAPPDATA%\SevenTVEmotesHelper`.
+
+Tests: `cargo test` in `helper-rs` (fake WoW install + fake 7TV); the Python suite is still
+`python -m pytest tests -q`. The addon and window tests need a
+Lua interpreter: generate a sample with `set DUMP_LOCAL=%TEMP%\Local.lua` + the pytest command, then
+`lua tests/test_addon.lua %TEMP%\Local.lua` and `lua tests/test_ui.lua %TEMP%\Local.lua`.
+
+## To check in game (not testable outside WoW)
+
+- [ ] Overwriting a reserved slot and `/reload`-ing shows the new emote (the whole design relies on this).
+- [ ] `/7tv status`: the time on the bar ticks every few seconds without a reload. (Restart WoW once
+      after installing helper 0.4, so the game sees the new status files.)
+- [ ] Chat filter and edit box hooks work on the Forever client (the addon looks up both old and new API names).
+- [ ] The helper detects the running game: the tray status says "(WoW open)" while playing. If not,
+      the Forever executable has a name the helper doesn't expect (see `wow.rs`).
+- [ ] `/7tv add <name>` uses 7TV's search API, which I couldn't test; links always work.
+- [ ] `/7tv texturetest` (after a WoW restart): which of the 5 test images show? Row 2 is the
+      format compression uses. If it's blank but another BLP row shows, switch the encoder to that one.
+- [ ] The /7tv window: built from plain frames, so it should be stable across client versions,
+      but layout has only been checked with mock frames.
+
+## Troubleshooting
+
+- `/7tv debug` in game prints the addon and helper versions, whether `SevenTVEmotes_Local` loaded,
+  the texture format, how many emote files WoW can't see yet, and a sample emote.
+- The helper's log is `%LOCALAPPDATA%\SevenTVEmotesHelper\helper.log`. It records whether it sees
+  WoW running ("WoW: WowForever.exe (pid ...)"), download progress, and any 7TV errors.
+- Emotes invisible right after the helper first runs (or after turning on compression for the
+  first time) usually means WoW was open when their files were created: restart WoW once.
+
+## Known limits
+
+- Emotes in dungeon/raid chat stay as text (the client hides that chat from addons).
+- Only players with the addon see emotes, and only the ones they have installed.
+- Zero-width (overlay) emotes are skipped.

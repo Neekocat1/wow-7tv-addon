@@ -1,0 +1,3 @@
+# Normalise line endings in the repo; Windows batch files keep CRLF.
+* text=auto
+*.bat text eol=crlf

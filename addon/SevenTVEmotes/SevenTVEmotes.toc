@@ -1,0 +1,21 @@
+## Interface: 16001, 120005, 120007
+## Title: |cff29b6f67TV|r Emotes
+## Notes: Shows 7TV emotes in chat. Type :name to autocomplete. /7tv for options.
+## Author: Connor
+## Version: 0.5.1
+## Category: Chat
+## SavedVariables: SevenTVEmotesDB
+## IconTexture: Interface\AddOns\SevenTVEmotes\media\minimap
+## AddonCompartmentFunc: SevenTVEmotes_OnAddonCompartmentClick
+## AddonCompartmentFuncOnEnter: SevenTVEmotes_OnAddonCompartmentEnter
+## AddonCompartmentFuncOnLeave: SevenTVEmotes_OnAddonCompartmentLeave
+
+Emotes.lua
+Core.lua
+Animator.lua
+Autocomplete.lua
+Helper.lua
+UI.lua
+LiveStatus.lua
+Minimap.lua
+Commands.lua
