@@ -3,7 +3,7 @@
 --   queued mode : requests not sent yet -> "Send" button (reloads; logging out also sends them)
 --   live mode   : the helper is working -> shows the helper's live status image + "Reload"
 --
--- The live image is a texture file the helper keeps rewriting (see status_board.py). WoW reads a
+-- The live image is a texture file the helper keeps rewriting (see helper-rs/src/status_board.rs). WoW reads a
 -- texture's contents the first time it's displayed, so showing a different file every few
 -- seconds gives an up-to-date picture without a reload. The addon can't read the picture; it's
 -- for the player, who can then reload at the right moment.

@@ -1,3 +1,0 @@
-pillow>=11.2
-psutil>=5.9
-pystray>=0.19

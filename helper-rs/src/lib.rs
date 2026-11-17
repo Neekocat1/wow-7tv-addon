@@ -1,6 +1,6 @@
 //! 7TV Emotes Helper: fetches 7TV emotes for the SevenTVEmotes World of Warcraft addon.
 //!
-//! Rust port of the Python helper (helper/seventv_helper, v0.5.1). Same files, same formats,
+//! Rust port of the original Python helper (v0.5.1, in the git history). Same files, same formats,
 //! same helper_state.json schema, so it can take over an existing install.
 
 pub mod draw;

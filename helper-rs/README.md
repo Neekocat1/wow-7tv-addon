@@ -1,6 +1,7 @@
 # 7TV Emotes Helper (Rust)
 
-Rust port of the Python helper in `../helper` (v0.5.1). It writes the same files in the same
+Rust port of the original Python helper (v0.5.1, removed from the repo after the port; it's in the
+git history). It writes the same files in the same
 formats (`Local.lua`, `slots/`, `cslots/`, `status/`, `test/`, `helper_state.json`), so it can
 take over an existing install, and it hands over from a running Python helper the same way a newer
 Python helper would (lock file + `quit.request`). The main reason for the port: no PyInstaller
@@ -43,7 +44,7 @@ from. Log, config and download cache are still in `%LOCALAPPDATA%\SevenTVEmotesH
 cargo test
 ```
 
-`tests/helper.rs` is a test-for-test port of `../tests/test_helper.py` (fake WoW install, fake
+`tests/helper.rs` is a test-for-test port of the Python helper's test suite (fake WoW install, fake
 7TV), plus a few extra checks (the WebP disposal bug below, an animated GIF, reading a Python-era
 `helper_state.json`). Unit tests live next to the code.
 
@@ -59,7 +60,7 @@ cd .. && lua tests/test_addon.lua %TEMP%\Local.lua && lua tests/test_ui.lua %TEM
 
 ## Module map
 
-| Rust | Python | |
+| Rust | Ported from (Python) | |
 |---|---|---|
 | `luasv.rs` | `luasv.py` | SavedVariables parser, Lua writer |
 | `seventv.rs` | `seventv.py` | 7TV API (ureq + rustls), link parsing |
@@ -94,6 +95,19 @@ cd .. && lua tests/test_addon.lua %TEMP%\Local.lua && lua tests/test_ui.lua %TEM
   release profile uses `panic = "unwind"` rather than `"abort"`.
 
 Version is 0.6.0 so it takes over from a running 0.5.x Python helper.
+
+## Still to do
+
+Not yet checked on a real Windows PC (the exe was built and smoke-tested under Wine):
+
+- [ ] Tray icon on a real desktop: the menu, the "Start with Windows" tick, balloon notifications.
+- [ ] First-run dialogs: the "WoW not found" folder picker and the message boxes.
+- [ ] Compiling `installer/SevenTVEmotesHelper.iss` and running the installer: install, start with
+      Windows, upgrade over a running helper, uninstall.
+- [ ] The installer taking over from a running Python helper (0.5.x) and removing its old copy.
+
+Planned: code signing, so SmartScreen stops warning about the exe and installer (Azure Artifact
+Signing, about $10/month, available to individuals in the US and Canada).
 
 ## Cross-compiling from Linux
 

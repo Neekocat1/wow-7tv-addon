@@ -354,7 +354,7 @@ end
 ---------------------------------------------------------------------------
 -- Startup
 ---------------------------------------------------------------------------
--- Pack shipped inside this addon (tools/build_pack.py); usually empty.
+-- Pack shipped inside this addon (Emotes.lua); empty unless emotes are baked in for a release.
 if ns.EmoteData and next(ns.EmoteData) then
     ns.RegisterPack("Bundled", ns.EmoteData, ADDON_NAME)
 end

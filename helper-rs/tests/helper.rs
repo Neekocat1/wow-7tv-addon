@@ -1,5 +1,5 @@
 //! End-to-end tests for the helper against a fake WoW install and a fake 7TV.
-//! Port of tests/test_helper.py (the Python helper's suite), test for test.
+//! Port of the Python helper's test suite (tests/test_helper.py, in the git history), test for test.
 //!
 //! Run: cargo test
 

@@ -9,13 +9,7 @@ addon/
 helper-rs/                the background app (Rust): see helper-rs/README.md
   build.bat               build SevenTVEmotesHelper.exe and the installer
   installer/              Inno Setup script (per-user install + start with Windows)
-helper/                   the original Python helper (reference implementation, v0.5.1)
-  seventv_helper/
-  run_helper.pyw          start it from source without a console window
-  build_exe.bat           build the old PyInstaller .exe
-  requirements.txt
-tools/build_pack.py       bake emotes straight into the addon (for a pre-built release)
-tests/                    helper tests (pytest) and addon tests (Lua)
+tests/                    addon tests (Lua); the helper's tests are in helper-rs/tests
 ```
 
 ## How it fits together
@@ -80,8 +74,7 @@ file, so switching only needs reloads, not a restart. (They used to sit side by 
 name, and WoW appears to match texture files by name regardless of extension, so it loaded the wrong
 one; helper 0.5 moves the .blp files and rebuilds affected emotes.) Until WoW has been restarted
 after the compressed placeholders were created, new emotes are built as TGA and converted later.
-The old files are blanked once the addon has reloaded onto the new ones. (The Python helper needed
-numpy for this; the Rust helper has the encoder built in.)
+The old files are blanked once the addon has reloaded onto the new ones.
 
 ## For players (once the .exe is built)
 
@@ -112,23 +105,11 @@ target\release\SevenTVEmotesHelper.exe --once --wow-dir "C:\Program Files (x86)\
 cargo test
 ```
 
-The Python helper is kept as the reference implementation:
+The helper only starts with Windows when the installer (or the tray toggle) sets that up;
+use `--autostart on|off` to test it.
 
-```bat
-cd helper
-python -m pip install -r requirements.txt
-
-rem one pass in the console against your install, then exit
-python -m seventv_helper --no-tray --once --wow-dir "C:\Program Files (x86)\World of Warcraft"
-
-rem run normally (tray icon)
-python run_helper.pyw
-
-rem build the .exe (also needs: python -m pip install pyinstaller)
-build_exe.bat
-```
-
-Running from source never turns on autostart by itself; use `--autostart on|off` to test it.
+The original Python helper (0.5.1) was removed after the Rust port; it's in the git history
+(first commit) if you ever need to compare against it.
 
 **Updating:** run the new installer. It asks the running helper to quit (via `quit.request` in the
 app folder), replaces the exe and starts the new one. Starting a newer exe by hand does the same
@@ -138,10 +119,10 @@ Python helper's old copy. Helpers before 0.5 don't understand the request: quit 
 icon first.
 The helper's own files (config, log, download cache) are in `%LOCALAPPDATA%\SevenTVEmotesHelper`.
 
-Tests: `cargo test` in `helper-rs` (fake WoW install + fake 7TV); the Python suite is still
-`python -m pytest tests -q`. The addon and window tests need a
-Lua interpreter: generate a sample with `set DUMP_LOCAL=%TEMP%\Local.lua` + the pytest command, then
-`lua tests/test_addon.lua %TEMP%\Local.lua` and `lua tests/test_ui.lua %TEMP%\Local.lua`.
+Tests: `cargo test` in `helper-rs` (fake WoW install + fake 7TV). The addon and window tests need a
+Lua interpreter (5.2+ for the window test): generate a sample Local.lua with
+`set DUMP_LOCAL=%TEMP%\Local.lua` and `cargo test --test helper requests` in `helper-rs`, then run
+`lua tests/test_addon.lua %TEMP%\Local.lua` and `lua tests/test_ui.lua %TEMP%\Local.lua` from here.
 
 ## To check in game (not testable outside WoW)
 
