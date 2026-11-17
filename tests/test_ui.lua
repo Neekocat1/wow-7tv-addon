@@ -287,6 +287,27 @@ mmToggle:Click()
 check(not mb.shown and not mmToggle.check.shown, "settings toggle hides the button")
 mmToggle:Click()
 check(mb.shown, "settings toggle shows it again")
+-- downloaded emote pack instead of the helper ------------------------------------------
+SevenTVEmotes_Helper = nil
+SevenTVEmotes_Pack = { built = NOW - 86400, url = "https://neekocat1.github.io/wow-7tv-addon/",
+    channels = { "grimmybear" }, global = true, sets = {}, emotes = 6, origin = { catJAM = "grimmybear's channel" } }
+UI:Show("add")
+check(ap.banner.text:find("downloaded emote pack") and ap.banner.text:find("neekocat1.github.io", 1, true), "add tab explains the pack: " .. ap.banner.text)
+check(not ap.addBtn.enabled, "adding emotes still needs the helper")
+UI:Show("downloads")
+local dlp = UI.pages.downloads.ctl
+check(dlp.title.text == "Using a downloaded emote pack" and dlp.sub.text:find("grimmybear, 7TV globals", 1, true), "downloads tab shows the pack: " .. dlp.sub.text)
+SlashCmdList.SEVENTVEMOTES("helper")
+check(printed[#printed]:find("build a new pack", 1, true) and printed[#printed - 1]:find("Downloaded emote pack from", 1, true), "/7tv helper describes the pack")
+local okq, msgq = ns.QueueRequest("add", "x", nil, "x", true)
+check(not okq and msgq:find("downloaded emote pack"), "queueing explains the pack")
+tipLines = {}
+mb.scripts.OnEnter(mb)
+check(table.concat(tipLines, "\n"):find("Downloaded emote pack", 1, true), "minimap tooltip shows the pack")
+SevenTVEmotes_Pack = nil
+UI:Show("add")
+check(ap.banner.text:find("isn't installed") and ap.banner.text:find("ready-made emote pack", 1, true), "no helper, no pack: points to the pack builder too")
+
 -- addon compartment entry
 f:Hide()
 SevenTVEmotes_OnAddonCompartmentClick(nil, "LeftButton")

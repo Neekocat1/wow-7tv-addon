@@ -41,8 +41,13 @@ end
 
 local function HelperStatus()
     local state, H = ns.HelperState()
-    if state == "missing" then
+    if state == "missing" and ns.PackInfo() then
+        ns.Print(ns.PackSummary() .. ".")
+        ns.Print("To change your emotes, build a new pack at " .. ns.PackUrl() .. " and restart WoW.")
+        return
+    elseif state == "missing" then
         ns.Print("Helper app: |cffff6060not installed|r. Without it you can use emotes but not add new ones.")
+        ns.Print("You can also download a ready-made emote pack at " .. ns.PACK_URL)
         return
     end
     local mins = floor((time() - (H.heartbeat or 0)) / 60)

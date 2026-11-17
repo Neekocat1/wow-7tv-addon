@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>7TV Emotes for WoW: Forever - emote pack builder</title>
+  <meta name="description" content="Build a pack of 7TV emotes for the 7TV Emotes addon in World of Warcraft: Forever. No app to install.">
+  <link rel="icon" href="icon.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header>
+      <img src="icon.png" alt="" width="48" height="48">
+      <div>
+        <h1>7TV emote pack builder</h1>
+        <p class="lead">for the <strong>7TV Emotes</strong> addon in World of Warcraft: Forever. Pick a streamer, download a zip, drop it in your AddOns folder. Nothing to install.</p>
+      </div>
+    </header>
+
+    <form id="form" autocomplete="off">
+      <label class="field">
+        <span class="label">Twitch channels</span>
+        <input id="channels" name="channels" type="text" placeholder="e.g. grimmybear, xqc" spellcheck="false">
+        <span class="hint">Their 7TV emotes go in your pack. Separate names with commas or spaces.</span>
+      </label>
+
+      <label class="check">
+        <input id="global" name="global" type="checkbox" checked>
+        <span>Include 7TV's global emotes</span>
+      </label>
+
+      <details id="extrasBox">
+        <summary>Add individual emotes or emote sets</summary>
+        <label class="field">
+          <textarea id="extras" name="extras" rows="5" spellcheck="false"
+            placeholder="One per line: a 7tv.app link or an exact emote name, optionally followed by a new name&#10;https://7tv.app/emotes/01F6MQ33FG000FFJ97ZB8MWV52&#10;catJAM dance&#10;https://7tv.app/emote-sets/..."></textarea>
+          <span class="hint">These win over channel and global emotes with the same name.</span>
+        </label>
+      </details>
+
+      <fieldset class="format">
+        <legend class="label">Texture format</legend>
+        <label class="check"><input type="radio" name="format" value="blp" checked> <span>Compressed <em>(recommended: about 4x smaller in memory)</em></span></label>
+        <label class="check"><input type="radio" name="format" value="tga"> <span>Uncompressed <em>(sharpest colours)</em></span></label>
+      </fieldset>
+
+      <div class="actions">
+        <button id="build" type="submit">Build my emote pack</button>
+        <button id="share" type="button" class="secondary">Copy link to these settings</button>
+      </div>
+    </form>
+
+    <section id="status" class="status" hidden aria-live="polite">
+      <div class="status-line"><span id="statusText"></span><span id="statusCount"></span></div>
+      <div class="bar"><div id="barFill"></div></div>
+      <div id="result" hidden>
+        <a id="download" class="download" download="SevenTVEmotes_Local.zip">Download SevenTVEmotes_Local.zip</a>
+        <span id="resultInfo"></span>
+      </div>
+      <details id="problemsBox" hidden>
+        <summary id="problemsSummary"></summary>
+        <ul id="problems"></ul>
+      </details>
+    </section>
+
+    <section class="steps">
+      <h2>Install your pack</h2>
+      <ol>
+        <li>Install the <strong>7TV Emotes</strong> addon (from CurseForge, choose the Forever version) if you haven't already.</li>
+        <li>Open <code>World of Warcraft\_forever_\Interface\AddOns</code>. If there's an old <code>SevenTVEmotes_Local</code> folder, delete it first.</li>
+        <li>Extract the zip there, so you get <code>AddOns\SevenTVEmotes_Local</code>.</li>
+        <li><strong>Restart WoW</strong> (a <code>/reload</code> isn't enough for new image files). Type <code>/7tv</code> to see your emotes.</li>
+      </ol>
+      <p>To change your emotes later, build a new pack and replace the folder the same way.</p>
+    </section>
+
+    <section class="notes">
+      <h2>Good to know</h2>
+      <ul>
+        <li><strong>Want to add emotes from inside the game instead?</strong> Use the free <a href="https://github.com/Neekocat1/wow-7tv-addon/releases/latest">7TV Emotes Helper</a> app for Windows: it keeps your emotes up to date and adds new ones with <code>/7tv add</code>. If you use the helper, you don't need packs (it replaces the pack's folder).</li>
+        <li>Everything happens in your browser: it downloads the emotes from 7TV and converts them on your computer. Nothing is uploaded or stored anywhere else.</li>
+        <li>Only 7TV emotes are supported, not BetterTTV or FrankerFaceZ. Many of those are on 7TV too: add them by name above.</li>
+        <li>Zero-width (overlay) emotes are skipped. Emotes belong to their creators on 7TV. This project isn't affiliated with 7TV, Twitch or Blizzard.</li>
+      </ul>
+    </section>
+
+    <footer>
+      <a href="https://github.com/Neekocat1/wow-7tv-addon">Source code</a>
+      <span id="version"></span>
+    </footer>
+  </main>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

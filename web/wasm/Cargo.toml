@@ -1,0 +1,21 @@
+[package]
+name = "seventv-pack-wasm"
+version = "0.6.1"
+edition = "2024"
+description = "The emote pack builder's WebAssembly module (shared code from helper-rs)"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+seventv-helper = { path = "../../helper-rs", default-features = false }
+indexmap = "2"
+serde_json = { version = "1", features = ["preserve_order"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true

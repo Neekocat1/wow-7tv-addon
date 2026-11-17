@@ -1,15 +1,21 @@
 # 7TV Emotes for WoW: Forever
 
-7TV emotes in World of Warcraft chat, with emotes added from inside the game.
+7TV emotes in World of Warcraft chat. Players get emotes either from the **7TV Emotes Helper** app
+(adds emotes from inside the game) or as a downloaded **emote pack** from the
+[pack builder](https://neekocat1.github.io/wow-7tv-addon/) web page (nothing to install).
 
 ```
 addon/
   SevenTVEmotes/          the addon players install (chat rendering, animation, autocomplete, /7tv)
-  SevenTVEmotes_Local/    template for the helper-managed addon (emotes the player added)
-helper-rs/                the background app (Rust): see helper-rs/README.md
+  SevenTVEmotes_Local/    template for the player's emote folder (helper-managed, or an emote pack)
+  package-curseforge.bat  zip SevenTVEmotes for CurseForge into dist/
+helper-rs/                the background app (Rust), and the emote code the web page shares: see helper-rs/README.md
   build.bat               build SevenTVEmotesHelper.exe and the installer
   installer/              Inno Setup script (per-user install + start with Windows)
-tests/                    addon tests (Lua); the helper's tests are in helper-rs/tests
+web/                      the emote pack builder web page (WebAssembly + JS): see web/README.md
+docs/                     CurseForge description
+tests/                    addon tests (Lua); the helper's and the web page's tests are in helper-rs/tests and web/test
+.github/workflows/        publishes web/ on GitHub Pages
 ```
 
 ## How it fits together
@@ -78,7 +84,14 @@ The old files are blanked once the addon has reloaded onto the new ones.
 
 ## For players
 
-Download `SevenTVEmotesHelper.exe` from the [latest release](../../releases/latest), put it somewhere
+Install the **7TV Emotes** addon (CurseForge, Forever version; or extract `SevenTVEmotes` from a
+release zip into `World of Warcraft\_forever_\Interface\AddOns`). Then get emotes one of two ways.
+
+**Emote pack (no install):** open the [pack builder](https://neekocat1.github.io/wow-7tv-addon/), enter
+Twitch channels and/or individual emotes, click Build, and extract the zip into the same AddOns folder
+(delete an old `SevenTVEmotes_Local` folder first). Restart WoW. Build a new pack to change your emotes.
+
+**The helper app (adds emotes from inside the game):** download `SevenTVEmotesHelper.exe` from the [latest release](../../releases/latest), put it somewhere
 permanent (e.g. a folder in Documents) and run it. On its first run it finds WoW: Forever, installs
 both addons and sits in the system tray. To have it start with Windows, right-click the tray icon
 and tick "Start with Windows". Restart WoW once after the first run. The exe isn't code-signed yet, so
@@ -99,6 +112,15 @@ After that everything happens in game:
 Autocomplete: type `:` plus two characters; Tab cycles, another `:` accepts.
 
 ## Development (Windows)
+
+**CurseForge:** run `addon\package-curseforge.bat`, then upload `dist\SevenTVEmotes-<version>.zip` as a
+Forever file. It contains only `SevenTVEmotes`; `SevenTVEmotes_Local` must never be in it, or CurseForge
+updates would wipe players' emotes. The description is in `docs/curseforge-description.md`.
+
+**Pack builder:** `web/build.bat` (or `web/build.sh`) builds its WebAssembly module from the helper's
+Rust code. Pushing to `main` publishes it on GitHub Pages through `.github/workflows/pages.yml`
+(one-time setup: Settings > Pages > Source: GitHub Actions; Pages on a free account needs a public repo).
+Details in `web/README.md`.
 
 The helper is the Rust program in `helper-rs/` (details in `helper-rs/README.md`):
 
@@ -127,6 +149,7 @@ Tests: `cargo test` in `helper-rs` (fake WoW install + fake 7TV). The addon and 
 Lua interpreter (5.2+ for the window test): generate a sample Local.lua with
 `set DUMP_LOCAL=%TEMP%\Local.lua` and `cargo test --test helper requests` in `helper-rs`, then run
 `lua tests/test_addon.lua %TEMP%\Local.lua` and `lua tests/test_ui.lua %TEMP%\Local.lua` from here.
+`test_addon.lua` also accepts an emote pack's `Local.lua` (see `web/README.md`).
 
 ## To check in game (not testable outside WoW)
 

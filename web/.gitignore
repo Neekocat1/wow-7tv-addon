@@ -1,0 +1,4 @@
+# built by build.sh / build.bat (and by the Pages workflow)
+/site/pack.wasm
+/site/version.txt
+/wasm/target

@@ -25,9 +25,26 @@ end
 -- Saved variables as WoW would load them, with pending requests r1..r3 and one unknown
 ns.db.queue = { {id="r1",kind="add",ref="x"}, {id="r7",kind="channel",ref="nobody"}, {id="zzz",kind="add",ref="later"} }
 assert(loadfile(LOCAL))()   -- the helper's file (own addon, globals only)
-NOW = SevenTVEmotes_Helper.heartbeat + 60
-
 local function check(c, msg) if not c then error("FAIL: "..msg, 2) end print("pass: "..msg) end
+
+-- A downloaded emote pack (web pack builder) instead of the helper's file -----------------
+if SevenTVEmotes_Pack and not SevenTVEmotes_Helper then
+  check(ns.count == SevenTVEmotes_Pack.emotes, "pack emotes registered: "..ns.count)
+  local e = ns.emotes.catJAM
+  check(e and e.path:find("^Interface\\AddOns\\SevenTVEmotes_Local\\pack\\.+%.blp$") and e.frames > 1, "pack texture path: "..(e and e.path or "none"))
+  ns.db.links = false
+  local t = ns.Emotify("hi catJAM OMEGALUL")
+  check(t:find("|TInterface\\AddOns\\SevenTVEmotes_Local\\pack\\", 1, false) and select(2, t:gsub("|T", "")) == 2, "pack emotes rendered in chat: "..t)
+  check(ns.AnimateText(t, e.ms * 7) ~= t, "animated pack emote advances")
+  check(ns.HelperState() == "missing" and ns.PackInfo() == SevenTVEmotes_Pack, "pack recognised without the helper")
+  ns.OnLoginHelper()
+  check(printed[#printed]:find("downloaded emote pack", 1, true), "login explains the pack when requests can't be sent")
+  local ok, msg = ns.QueueRequest("add", "catJAM", nil, "catJAM", true)
+  check(not ok and msg:find(SevenTVEmotes_Pack.url, 1, true), "adding points to the pack builder")
+  print("ALL GOOD (pack)")
+  return
+end
+NOW = SevenTVEmotes_Helper.heartbeat + 60
 check(ns.count >= 6, "emotes registered from Local.lua: "..ns.count)
 check(ns.emotes.catJAM.path == "Interface\\AddOns\\SevenTVEmotes_Local\\slots\\s0001.tga", "slot path")
 ns.db.links = false

@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::fmt;
+#[cfg(feature = "native")]
 use std::time::Duration;
 
 pub const API: &str = "https://7tv.io/v3";
@@ -57,17 +58,20 @@ pub struct Emote {
 
 // --------------------------------------------------------------------------- HTTP
 
+#[cfg(feature = "native")]
 pub struct UreqHttp {
     agent: ureq::Agent,
     retries: u32,
 }
 
+#[cfg(feature = "native")]
 impl Default for UreqHttp {
     fn default() -> Self {
         Self::new()
     }
 }
 
+#[cfg(feature = "native")]
 impl UreqHttp {
     pub fn new() -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
@@ -124,6 +128,7 @@ impl UreqHttp {
     }
 }
 
+#[cfg(feature = "native")]
 impl Http for UreqHttp {
     fn get_json(&self, url: &str) -> ApiResult<Value> {
         self.json(url, None)
@@ -269,21 +274,30 @@ pub fn emotes_from_set(set_json: &Value, include_zero_width: bool) -> Vec<Emote>
     out
 }
 
-pub fn fetch_global(http: &dyn Http) -> ApiResult<Vec<Emote>> {
-    Ok(emotes_from_set(
-        &http.get_json(&format!("{API}/emote-sets/global"))?,
-        false,
-    ))
+// URLs, shared with the web pack builder.
+pub fn global_set_url() -> String {
+    format!("{API}/emote-sets/global")
+}
+pub fn set_url(set_id: &str) -> String {
+    format!("{API}/emote-sets/{set_id}")
+}
+pub fn emote_url(emote_id: &str) -> String {
+    format!("{API}/emotes/{emote_id}")
+}
+pub fn twitch_login_url(login: &str) -> String {
+    format!("{IVR}{}", quote(&login.to_lowercase()))
+}
+pub fn twitch_user_url(twitch_id: &str) -> String {
+    format!("{API}/users/twitch/{twitch_id}")
 }
 
-pub fn fetch_set(http: &dyn Http, set_id: &str) -> ApiResult<(String, Vec<Emote>)> {
-    let j = http.get_json(&format!("{API}/emote-sets/{set_id}"))?;
-    let name = s(&j, "name").unwrap_or(set_id).to_string();
-    Ok((name, emotes_from_set(&j, false)))
+/// The set's display name (falls back to its id).
+pub fn set_name(j: &Value, set_id: &str) -> String {
+    s(j, "name").unwrap_or(set_id).to_string()
 }
 
-pub fn fetch_emote(http: &dyn Http, emote_id: &str) -> ApiResult<Emote> {
-    let j = http.get_json(&format!("{API}/emotes/{emote_id}"))?;
+/// A single emote from `/emotes/{id}`.
+pub fn emote_from_json(j: &Value) -> ApiResult<Emote> {
     match (
         j.get("name").and_then(Value::as_str),
         j.get("id").and_then(Value::as_str),
@@ -301,6 +315,52 @@ pub fn fetch_emote(http: &dyn Http, emote_id: &str) -> ApiResult<Emote> {
     }
 }
 
+/// Twitch id from the ivr.fi lookup.
+pub fn twitch_id_from_json(j: &Value, login: &str) -> ApiResult<String> {
+    let first = match j {
+        Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
+        other => other.clone(),
+    };
+    match first.get("id") {
+        Some(Value::String(s)) if !s.is_empty() => Ok(s.clone()),
+        Some(Value::Number(n)) => Ok(n.to_string()),
+        _ => Err(ApiError::NotFound(format!(
+            "Couldn't find the Twitch channel '{login}'."
+        ))),
+    }
+}
+
+/// The active emote set from `/users/twitch/{id}`. Returns the set and, when 7TV left out its
+/// emotes, the id of the set to fetch separately.
+pub fn channel_set_from_json(j: &Value) -> (Value, Option<String>) {
+    let es = j
+        .get("emote_set")
+        .filter(|v| v.is_object())
+        .cloned()
+        .unwrap_or(json!({}));
+    let fetch = match s(&es, "id") {
+        Some(id) if es.get("emotes").is_none_or(Value::is_null) => Some(id.to_string()),
+        _ => None,
+    };
+    (es, fetch)
+}
+
+pub fn fetch_global(http: &dyn Http) -> ApiResult<Vec<Emote>> {
+    Ok(emotes_from_set(
+        &http.get_json(&format!("{API}/emote-sets/global"))?,
+        false,
+    ))
+}
+
+pub fn fetch_set(http: &dyn Http, set_id: &str) -> ApiResult<(String, Vec<Emote>)> {
+    let j = http.get_json(&set_url(set_id))?;
+    Ok((set_name(&j, set_id), emotes_from_set(&j, false)))
+}
+
+pub fn fetch_emote(http: &dyn Http, emote_id: &str) -> ApiResult<Emote> {
+    emote_from_json(&http.get_json(&emote_url(emote_id))?)
+}
+
 /// `urllib.parse.quote` (safe="/").
 fn quote(s: &str) -> String {
     let mut out = String::new();
@@ -316,39 +376,25 @@ fn quote(s: &str) -> String {
 
 pub fn twitch_login_to_id(http: &dyn Http, login: &str) -> ApiResult<String> {
     let not_found = || ApiError::NotFound(format!("Couldn't find the Twitch channel '{login}'."));
-    let j = match http.get_json(&format!("{IVR}{}", quote(&login.to_lowercase()))) {
+    let j = match http.get_json(&twitch_login_url(login)) {
         Err(ApiError::NotFound(_)) => return Err(not_found()),
         other => other?,
     };
-    let first = match &j {
-        Value::Array(a) => a.first().cloned().unwrap_or(Value::Null),
-        other => other.clone(),
-    };
-    match first.get("id") {
-        Some(Value::String(s)) if !s.is_empty() => Ok(s.clone()),
-        Some(Value::Number(n)) => Ok(n.to_string()),
-        _ => Err(not_found()),
-    }
+    twitch_id_from_json(&j, login)
 }
 
 /// Returns (twitch_id, emotes) for a channel's active 7TV emote set.
 pub fn fetch_twitch_channel(http: &dyn Http, login: &str) -> ApiResult<(String, Vec<Emote>)> {
     let twitch_id = twitch_login_to_id(http, login)?;
-    let j = match http.get_json(&format!("{API}/users/twitch/{twitch_id}")) {
+    let j = match http.get_json(&twitch_user_url(&twitch_id)) {
         Err(ApiError::NotFound(_)) => {
             return Err(ApiError::NotFound(format!("{login} doesn't use 7TV")));
         }
         other => other?,
     };
-    let mut es = j
-        .get("emote_set")
-        .filter(|v| v.is_object())
-        .cloned()
-        .unwrap_or(json!({}));
-    if let Some(id) = s(&es, "id")
-        && es.get("emotes").is_none_or(Value::is_null)
-    {
-        es = http.get_json(&format!("{API}/emote-sets/{id}"))?;
+    let (mut es, fetch) = channel_set_from_json(&j);
+    if let Some(id) = fetch {
+        es = http.get_json(&set_url(&id))?;
     }
     Ok((twitch_id, emotes_from_set(&es, false)))
 }
@@ -359,17 +405,25 @@ const SEARCH: &str = "query SearchEmotes($query: String!, $page: Int, $limit: In
   }
 }";
 
-/// Most popular public 7TV emote with exactly this name (case-sensitive), if any.
-pub fn search_by_name(http: &dyn Http, name: &str) -> ApiResult<Option<Emote>> {
-    let body = json!({
+/// The GraphQL request body for an exact-name search (POST to [`GQL`]).
+pub fn search_body(name: &str) -> Value {
+    json!({
         "query": SEARCH,
         "variables": {
             "query": name, "page": 1, "limit": 20,
             "filter": {"exact_match": true, "case_sensitive": true, "ignore_tags": true},
             "sort": {"value": "popularity", "order": "DESCENDING"},
         }
-    });
-    let j = http.post_json(GQL, &body)?;
+    })
+}
+
+/// Most popular public 7TV emote with exactly this name (case-sensitive), if any.
+pub fn search_by_name(http: &dyn Http, name: &str) -> ApiResult<Option<Emote>> {
+    Ok(search_pick(&http.post_json(GQL, &search_body(name))?, name))
+}
+
+/// The first search result with exactly this name.
+pub fn search_pick(j: &Value, name: &str) -> Option<Emote> {
     let items = j
         .pointer("/data/emotes/items")
         .and_then(Value::as_array)
@@ -380,15 +434,15 @@ pub fn search_by_name(http: &dyn Http, name: &str) -> ApiResult<Option<Emote>> {
             && truthy(it.get("host"))
             && let Some(id) = it.get("id").and_then(Value::as_str)
         {
-            return Ok(Some(Emote {
+            return Some(Emote {
                 name: name.to_string(),
                 id: id.to_string(),
                 animated: truthy(it.get("animated")),
                 host: it["host"].clone(),
-            }));
+            });
         }
     }
-    Ok(None)
+    None
 }
 
 #[cfg(test)]

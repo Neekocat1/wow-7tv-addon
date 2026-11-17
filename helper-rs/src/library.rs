@@ -18,7 +18,7 @@
 //! A slot created (or freed) while the game is running is only used after a restart.
 
 use crate::images::{self, Layout, RenderOptions};
-use crate::luasv::{TableBuilder, Value as Lua, lua_str, lua_value};
+use crate::luasv::{TableBuilder, Value as Lua, lua_value};
 use crate::seventv::{self, ApiError, Emote, Http, Ref};
 use crate::status_board::StatusBoard;
 use crate::wow::{LOCAL_ADDON, addons_dir};
@@ -37,11 +37,7 @@ pub const TOP_UP: usize = 500;
 pub const RESULT_DAYS: f64 = 14.0;
 pub const REFRESH_EVERY: f64 = 6.0 * 3600.0;
 
-/// `^[^\s|]{1,64}$`
-pub fn valid_name(name: &str) -> bool {
-    let n = name.chars().count();
-    (1..=64).contains(&n) && !name.chars().any(|c| c.is_whitespace() || c == '|')
-}
+pub use crate::pack::valid_name;
 
 // --------------------------------------------------------------------------- state (helper_state.json)
 
@@ -447,12 +443,25 @@ impl Library {
 
     // ------------------------------------------------------------------ install
 
+    /// The helper has set up this folder. (A folder with a .toc but no helper_state.json came
+    /// from a downloaded emote pack, or lost its state: install() sets it up properly.)
     pub fn installed(&self) -> bool {
-        self.dir.join(format!("{LOCAL_ADDON}.toc")).exists()
+        self.dir.join(format!("{LOCAL_ADDON}.toc")).exists() && self.state_path.exists()
     }
 
     /// Create/refresh the SevenTVEmotes_Local addon folder and reserve slots.
     pub fn install(&mut self) -> std::io::Result<()> {
+        // A downloaded emote pack keeps its textures in pack/; the helper's own files replace it.
+        let pack_dir = self.dir.join(crate::pack::PACK_DIR);
+        if pack_dir.is_dir() {
+            match std::fs::remove_dir_all(&pack_dir) {
+                Ok(()) => log::info!("{}: replaced a downloaded emote pack", self.name()),
+                Err(e) => log::warn!(
+                    "{}: couldn't remove the old emote pack folder: {e}",
+                    self.name()
+                ),
+            }
+        }
         std::fs::create_dir_all(&self.dir)?;
         std::fs::create_dir_all(&self.slots_dir)?;
         if let Some(toc) = &self.template_toc {
@@ -668,19 +677,7 @@ impl Library {
 
     /// name -> (emote, source key); later sources win (global < channels < manual).
     pub fn desired_with_sources(&self) -> IndexMap<String, (Emote, String)> {
-        let removed: HashSet<&String> = self.state.removed.iter().collect();
-        let mut out: IndexMap<String, (Emote, String)> = IndexMap::new();
-        for (key, ems) in self.sources_in_order() {
-            for em in ems {
-                if key != "manual" && removed.contains(&em.name) {
-                    continue;
-                }
-                if valid_name(&em.name) && seventv::is_id(&em.id) {
-                    out.insert(em.name.clone(), (em, key.clone()));
-                }
-            }
-        }
-        out
+        crate::pack::resolve(&self.sources_in_order(), &self.state.removed)
     }
 
     pub fn desired(&self) -> IndexMap<String, Emote> {
@@ -691,21 +688,8 @@ impl Library {
     }
 
     pub fn source_label(&self, key: &str) -> String {
-        match key {
-            "global" => "7TV global emotes".into(),
-            "manual" => "Added by you".into(),
-            k if k.starts_with("channel:") => format!("{}'s channel", &k[8..]),
-            k if k.starts_with("set:") => {
-                let label = self
-                    .state
-                    .sources
-                    .get(k)
-                    .and_then(|s| s.label.clone())
-                    .unwrap_or_else(|| k[4..].to_string());
-                format!("Set: {label}")
-            }
-            k => k.to_string(),
-        }
+        let set_label = self.state.sources.get(key).and_then(|s| s.label.as_deref());
+        crate::pack::source_label(key, set_label)
     }
 
     // ------------------------------------------------------------------ reconcile
@@ -1020,10 +1004,11 @@ impl Library {
         }
 
         let mut lines: Vec<String> = vec![
-            "-- Written by the 7TV Emotes Helper app. Anything you change here gets overwritten.".into(),
+            "-- Written by the 7TV Emotes Helper app. Anything you change here gets overwritten."
+                .into(),
             format!("SevenTVEmotes_Helper = {}", lua_value(&status.build(), "")),
             String::new(),
-            "-- [name] = { file, width, height, texWidth, texHeight, 7tvId [, frames, columns, msPerFrame] }".into(),
+            crate::pack::EMOTES_HEADER.into(),
             "local emotes = {".into(),
         ];
         let mut names: Vec<(&String, &(Emote, String))> = want.iter().collect();
@@ -1035,35 +1020,23 @@ impl Library {
             if info.rebuild {
                 continue;
             }
-            let path = Self::slot_lua_path(&info.slot, &info.fmt);
-            let mut vals = vec![
-                lua_str(&path),
-                info.w.to_string(),
-                info.h.to_string(),
-                info.tw.to_string(),
-                info.th.to_string(),
-                lua_str(&em.id),
-            ];
-            if info.frames > 1 {
-                vals.extend([
-                    info.frames.to_string(),
-                    info.cols.to_string(),
-                    info.ms.to_string(),
-                ]);
-            }
-            lines.push(format!(
-                "  [{}] = {{ {} }},",
-                lua_str(name),
-                vals.join(", ")
+            let layout = Layout {
+                w: info.w,
+                h: info.h,
+                tw: info.tw,
+                th: info.th,
+                frames: info.frames,
+                cols: info.cols,
+                ms: info.ms,
+            };
+            lines.push(crate::pack::emote_entry(
+                name,
+                &Self::slot_lua_path(&info.slot, &info.fmt),
+                &layout,
+                &em.id,
             ));
         }
-        lines.extend([
-            "}".into(),
-            "if SevenTVEmotes and SevenTVEmotes.RegisterPack then".into(),
-            format!("  SevenTVEmotes.RegisterPack(\"My emotes\", emotes, \"{LOCAL_ADDON}\")"),
-            "end".into(),
-            String::new(),
-        ]);
+        lines.extend(crate::pack::register_footer());
         std::fs::create_dir_all(&self.dir)?;
         let out = self.dir.join("Local.lua");
         let tmp = self.dir.join("Local.lua.part");

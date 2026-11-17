@@ -3,27 +3,42 @@
 //! Rust port of the original Python helper (v0.5.1, in the git history). Same files, same formats,
 //! same helper_state.json schema, so it can take over an existing install.
 
-pub mod draw;
+// Shared with the web pack builder (compiles without the "native" feature, including to WebAssembly).
+pub mod bundle;
 pub mod images;
-pub mod installer;
-pub mod instance;
-pub mod library;
-pub mod logger;
 pub mod luasv;
-pub mod paths;
-pub mod service;
+pub mod pack;
 pub mod seventv;
+
+// The Windows helper app.
+#[cfg(feature = "native")]
+pub mod draw;
+#[cfg(feature = "native")]
+pub mod installer;
+#[cfg(feature = "native")]
+pub mod instance;
+#[cfg(feature = "native")]
+pub mod library;
+#[cfg(feature = "native")]
+pub mod logger;
+#[cfg(feature = "native")]
+pub mod paths;
+#[cfg(feature = "native")]
+pub mod service;
+#[cfg(feature = "native")]
 pub mod status_board;
+#[cfg(feature = "native")]
 pub mod wow;
 
-#[cfg(windows)]
+#[cfg(all(windows, feature = "native"))]
 pub mod tray;
-#[cfg(windows)]
+#[cfg(all(windows, feature = "native"))]
 pub mod win;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 
-/// Seconds since the Unix epoch (Python's time.time()).
+/// Seconds since the Unix epoch (Python's time.time()). Not available in WebAssembly builds.
+#[cfg(feature = "native")]
 pub fn now() -> f64 {
     system_time_secs(std::time::SystemTime::now())
 }
@@ -35,6 +50,7 @@ pub fn system_time_secs(t: std::time::SystemTime) -> f64 {
     }
 }
 
+#[cfg(feature = "native")]
 #[doc(hidden)]
 pub mod testutil {
     use std::path::{Path, PathBuf};

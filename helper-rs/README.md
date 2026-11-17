@@ -62,6 +62,8 @@ cd .. && lua tests/test_addon.lua %TEMP%\Local.lua && lua tests/test_ui.lua %TEM
 
 | Rust | Ported from (Python) | |
 |---|---|---|
+| `pack.rs` | | emote selection rules, Local.lua emote lines, emote packs (shared with `web/`) |
+| `bundle.rs` | | the addon files embedded in the exe |
 | `luasv.rs` | `luasv.py` | SavedVariables parser, Lua writer |
 | `seventv.rs` | `seventv.py` | 7TV API (ureq + rustls), link parsing |
 | `images.rs` | `images.py` | decode WEBP/GIF/PNG/APNG, sprite sheets, TGA, BLP2 DXT5 + mips |
@@ -73,6 +75,16 @@ cd .. && lua tests/test_addon.lua %TEMP%\Local.lua && lua tests/test_ui.lua %TEM
 | `installer.rs` | `installer.py` | addon install, autostart |
 | `tray.rs`, `win.rs` | `tray.py`, dialogs | native Win32 tray, message boxes, folder picker, registry |
 | `main.rs` | `__main__.py` | flags, first run |
+
+## Shared with the pack builder
+
+The `native` feature (on by default) is the Windows app. Without it, the crate is just the emote code
+(`seventv`, `images`, `luasv`, `pack`), which `web/wasm` compiles to WebAssembly so the pack builder
+picks and converts emotes exactly like the helper. `cargo build --no-default-features` checks that
+this part still builds on its own.
+
+When the helper finds a `SevenTVEmotes_Local` folder without its `helper_state.json` (an emote pack),
+it sets the folder up as its own and removes the pack's `pack/` textures.
 
 ## Differences from the Python helper
 

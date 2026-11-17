@@ -1,6 +1,6 @@
-## Interface: 16001, 120005, 120007
+## Interface: 16001
 ## Title: |cff29b6f67TV|r Emotes - My Emotes
-## Notes: Emotes you added with /7tv. Managed by the 7TV Emotes Helper app; don't edit by hand.
+## Notes: Your emotes, from the 7TV Emotes Helper app or a downloaded emote pack. Don't edit by hand.
 ## Author: Connor
 ## Version: 1
 ## Category: Chat

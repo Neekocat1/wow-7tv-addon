@@ -69,6 +69,8 @@ function MM:Tooltip(tip)
         tip:AddLine("Helper app running", 0.25, 1, 0.25)
     elseif state == "stale" then
         tip:AddLine("Helper app not seen recently", 1, 0.82, 0)
+    elseif ns.PackInfo and ns.PackInfo() then
+        tip:AddLine(ns.PackSummary(), 0.16, 0.71, 0.96)
     else
         tip:AddLine("Helper app not installed", 1, 0.38, 0.38)
     end

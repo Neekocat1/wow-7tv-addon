@@ -386,7 +386,7 @@ local function BuildEmotesPage(page)
         d.preview:SetSize(w, h)
         SetEmoteTexture(d.preview, e)
         d.name:SetText(e.name)
-        local H = SevenTVEmotes_Helper
+        local H = type(SevenTVEmotes_Helper) == "table" and SevenTVEmotes_Helper or ns.PackInfo()
         local origin = (e.pack == "My emotes" and type(H) == "table" and type(H.origin) == "table" and H.origin[e.name])
             or (e.pack == "Bundled" and "Comes with the addon") or e.pack
         d.info:SetText(format("%s\n%s", origin or "", e.frames and format("Animated, %d frames", e.frames) or "Static"))
@@ -398,6 +398,9 @@ local function BuildEmotesPage(page)
             d.remove:SetActive(false)
         elseif PendingRemoval(e.name) then
             d.remove:SetLabel("Removal queued")
+            d.remove:SetActive(false)
+        elseif ns.HelperState() == "missing" and ns.PackInfo() then
+            d.remove:SetLabel("Part of your emote pack")
             d.remove:SetActive(false)
         else
             d.remove:SetLabel("Remove")
@@ -533,8 +536,12 @@ local function BuildAddPage(page)
     function p:Refresh()
         local state, H = ns.HelperState()
         local enabled = state ~= "missing"
-        if state == "missing" then
-            self.banner:SetText(RED .. "The 7TV Emotes Helper app isn't installed.|r Adding emotes needs it: install it once and it runs in the background.")
+        if state == "missing" and ns.PackInfo() then
+            self.banner:SetText("Your emotes come from a downloaded emote pack. " .. GREY .. "To change them, build a new pack at "
+                .. ns.PackUrl() .. " and restart WoW, or install the 7TV Emotes Helper app to add emotes here.|r")
+        elseif state == "missing" then
+            self.banner:SetText(RED .. "The 7TV Emotes Helper app isn't installed.|r Adding emotes needs it: install it once and it runs in the background."
+                .. GREY .. " Or download a ready-made emote pack at " .. ns.PACK_URL .. "|r")
         elseif state == "stale" then
             self.banner:SetText(YELLOW .. "The helper app hasn't checked in recently.|r You can still queue emotes; start the helper from your system tray, then reload.")
         else
@@ -729,10 +736,16 @@ local function BuildDownloadsPage(page)
             self.dot:SetColorTexture(1, 0.82, 0, 1)
             self.title:SetText("Helper app not running")
             self.sub:SetText(format("Last seen %s. Start it from the Start menu or system tray; queued requests wait until it's back.", Ago(H.heartbeat)))
+        elseif ns.PackInfo() then
+            self.dot:SetColorTexture(ACCENT[1], ACCENT[2], ACCENT[3], 1)
+            self.title:SetText("Using a downloaded emote pack")
+            self.sub:SetText(ns.PackSummary() .. ". To change your emotes, build a new pack at " .. ns.PackUrl()
+                .. " and restart WoW.")
         else
             self.dot:SetColorTexture(1, 0.3, 0.3, 1)
             self.title:SetText("Helper app not installed")
-            self.sub:SetText("The 7TV Emotes Helper downloads emotes for you. You can still use emotes that are already installed.")
+            self.sub:SetText("The 7TV Emotes Helper downloads emotes for you. You can still use emotes that are already installed. Without it, you can download an emote pack at "
+                .. ns.PACK_URL)
         end
         if ns.Board and ns.Board() and state ~= "missing" then
             self.live:Show()

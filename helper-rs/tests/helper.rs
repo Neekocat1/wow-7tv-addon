@@ -1098,3 +1098,34 @@ fn tray_icon_draws() {
         );
     }
 }
+
+#[test]
+fn helper_replaces_a_downloaded_emote_pack() {
+    // A pack from the web builder: .toc, Local.lua with SevenTVEmotes_Pack, textures in pack/,
+    // and no helper_state.json.
+    let f = fake();
+    let dir = local_dir(&f);
+    std::fs::create_dir_all(dir.join("pack")).unwrap();
+    std::fs::write(
+        dir.join("SevenTVEmotes_Local.toc"),
+        "## Interface: 16001\n\nLocal.lua\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Local.lua"),
+        "SevenTVEmotes_Pack = { built = 1 }\n",
+    )
+    .unwrap();
+    std::fs::write(dir.join("pack").join("01X.blp"), b"x").unwrap();
+    let mut svc = make_service(&f);
+    svc.run_once();
+    assert!(!dir.join("pack").exists(), "pack textures removed");
+    assert!(
+        count_ext(&dir.join("slots"), "tga") >= 1500,
+        "slots reserved"
+    );
+    let lua = local_lua(&f);
+    assert!(lua.contains("SevenTVEmotes_Helper = {") && !lua.contains("SevenTVEmotes_Pack"));
+    assert!(lua.contains(r#"["catJAM"]"#));
+    assert!(dir.join("helper_state.json").exists());
+}

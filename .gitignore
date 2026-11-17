@@ -3,3 +3,5 @@ helper-rs/target/
 helper-rs/dist/
 # packaged releases
 addon/*.zip
+# release files (CurseForge zip, helper exe)
+/dist/

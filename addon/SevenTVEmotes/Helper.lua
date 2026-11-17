@@ -6,8 +6,13 @@
 --   addon -> helper : requests in SevenTVEmotesDB.queue (saved to disk on /reload or logout)
 --   helper -> addon : SevenTVEmotes_Local/Local.lua (read when the UI loads), which holds
 --                     the emotes plus SevenTVEmotes_Helper = { version, heartbeat, results, ... }
+-- Players without the helper can instead download an emote pack from the web pack builder: the
+-- same folder, with SevenTVEmotes_Pack = { built, url, channels, ... } in place of the helper's table.
 local ADDON_NAME, ns = ...
 local format = string.format
+local date = date or (os and os.date)
+
+ns.PACK_URL = "https://neekocat1.github.io/wow-7tv-addon/"
 
 local STALE_AFTER = 15 * 60 -- the helper rewrites Local.lua every few minutes while running
 
@@ -26,6 +31,39 @@ end
 local MISSING_HELP = "Adding emotes needs the free 7TV Emotes Helper app running on your PC. "
     .. "Install it once and it starts with Windows."
 
+-- The downloaded emote pack's info, when the emotes come from a pack rather than the helper.
+function ns.PackInfo()
+    local P = SevenTVEmotes_Pack
+    if type(P) ~= "table" or type(SevenTVEmotes_Helper) == "table" then return nil end
+    return P
+end
+
+function ns.PackUrl()
+    local P = ns.PackInfo()
+    return (P and type(P.url) == "string" and P.url ~= "" and P.url) or ns.PACK_URL
+end
+
+-- "Downloaded emote pack from 2026-11-17 (grimmybear, 7TV globals)"
+function ns.PackSummary(P)
+    P = P or ns.PackInfo()
+    if not P then return "" end
+    local from = {}
+    for _, c in ipairs(type(P.channels) == "table" and P.channels or {}) do from[#from + 1] = tostring(c) end
+    if P.global then from[#from + 1] = "7TV globals" end
+    for _, s in ipairs(type(P.sets) == "table" and P.sets or {}) do from[#from + 1] = tostring(s) end
+    local when = (tonumber(P.built) and date) and date("%Y-%m-%d", tonumber(P.built)) or "earlier"
+    return format("Downloaded emote pack from %s%s", when, #from > 0 and (" (" .. table.concat(from, ", ") .. ")") or "")
+end
+
+-- What to tell a player who has no helper.
+function ns.MissingHelp()
+    if ns.PackInfo() then
+        return "Your emotes come from a downloaded emote pack. To change them, build a new pack at "
+            .. ns.PackUrl() .. " and restart WoW, or install the free 7TV Emotes Helper app to add emotes in game."
+    end
+    return MISSING_HELP .. " Or download a ready-made emote pack at " .. ns.PACK_URL
+end
+
 ns.sessionIds = {}       -- requests queued since the last reload (not on disk yet)
 ns.queueListeners = {}
 
@@ -38,8 +76,8 @@ end
 function ns.QueueRequest(kind, ref, alias, label, quiet)
     local state = ns.HelperState()
     if state == "missing" then
-        if not quiet then ns.Print(MISSING_HELP) end
-        return false, MISSING_HELP
+        if not quiet then ns.Print(ns.MissingHelp()) end
+        return false, ns.MissingHelp()
     end
     local q = ns.db.queue
     for _, r in ipairs(q) do
@@ -132,7 +170,7 @@ function ns.OnLoginHelper()
             ns.Print(format("%d request%s waiting for the helper app. Start it (it may have been closed), then /reload.",
                 #q, #q == 1 and " is" or "s are"))
         else
-            ns.Print(MISSING_HELP)
+            ns.Print(ns.MissingHelp())
         end
     end
     -- The status bar shows the helper's live progress while requests are being worked on.
@@ -146,7 +184,7 @@ function ns.OnLoginHelper()
 
     if ns.count == 0 then
         if state == "missing" then
-            ns.Print("No emotes installed. " .. MISSING_HELP)
+            ns.Print("No emotes installed. " .. ns.MissingHelp())
         else
             ns.Print("No emotes yet. Try /7tv add <7tv.app emote link> or /7tv channel <twitch name>.")
         end

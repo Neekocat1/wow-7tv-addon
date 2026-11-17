@@ -51,30 +51,32 @@ pub fn pick_file(host: &Value, size: i64) -> Option<Value> {
 }
 
 /// Download (or reuse from the cache) the file the texture is built from.
+/// The file to build an emote's texture from: (file name, full https URL).
+pub fn file_url(host: &Value, size: i64) -> Option<(String, String)> {
+    let f = pick_file(host, size)?;
+    let fname = f.get("name").and_then(Value::as_str)?.to_string();
+    let base = host.get("url").and_then(Value::as_str).unwrap_or("");
+    let base = if base.starts_with("//") {
+        format!("https:{base}")
+    } else {
+        base.to_string()
+    };
+    Some((fname.clone(), format!("{base}/{fname}")))
+}
+
 pub fn download(
     http: &dyn Http,
     emote: &Emote,
     size: i64,
     cache: &Path,
 ) -> Result<PathBuf, String> {
-    let f = pick_file(&emote.host, size).ok_or("emote has no files")?;
-    let fname = f
-        .get("name")
-        .and_then(Value::as_str)
-        .ok_or("emote file has no name")?;
+    let (fname, url) = file_url(&emote.host, size).ok_or("emote has no usable file")?;
     std::fs::create_dir_all(cache).map_err(|e| e.to_string())?;
     let path = cache.join(format!("{}_{}", emote.id, fname));
     let have = std::fs::metadata(&path)
         .map(|m| m.len() > 0)
         .unwrap_or(false);
     if !have {
-        let base = emote.host.get("url").and_then(Value::as_str).unwrap_or("");
-        let base = if base.starts_with("//") {
-            format!("https:{base}")
-        } else {
-            base.to_string()
-        };
-        let url = format!("{base}/{fname}");
         let data = http.get_bytes(&url).map_err(|e| match e {
             ApiError::NotFound(u) => format!("not found: {u}"),
             other => other.to_string(),
@@ -96,7 +98,12 @@ pub fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 /// All frames (composited, full canvas) and their durations in ms.
 pub fn load_frames(path: &Path) -> Result<(Vec<RgbaImage>, Vec<u32>), String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
-    let fmt = image::guess_format(&data).map_err(|e| e.to_string())?;
+    load_frames_bytes(&data)
+}
+
+/// Same as [`load_frames`], from the file's bytes.
+pub fn load_frames_bytes(data: &[u8]) -> Result<(Vec<RgbaImage>, Vec<u32>), String> {
+    let fmt = image::guess_format(data).map_err(|e| e.to_string())?;
     let err = |e: image::ImageError| e.to_string();
     let frames: Vec<image::Frame> = match fmt {
         ImageFormat::Gif => GifDecoder::new(Cursor::new(&data))
@@ -658,17 +665,20 @@ fn is_blp(p: &Path) -> bool {
 /// Save as .tga or .blp depending on the extension, atomically (WoW never sees half a file).
 pub fn save_texture(img: &RgbaImage, out: &Path) -> std::io::Result<()> {
     let tmp = with_suffix(out, ".part");
-    let bytes = if is_blp(out) {
-        if img.width() < 4 || img.height() < 4 {
-            blp_bytes(&pad(img, img.width().max(4), img.height().max(4)), true)
-        } else {
-            blp_bytes(img, true)
-        }
-    } else {
-        tga_bytes(img)
-    };
-    std::fs::write(&tmp, bytes)?;
+    std::fs::write(&tmp, texture_bytes(img, is_blp(out)))?;
     std::fs::rename(&tmp, out)
+}
+
+/// The file contents for a texture: BLP2 DXT5 with mipmaps, or 32-bit TGA.
+pub fn texture_bytes(img: &RgbaImage, blp: bool) -> Vec<u8> {
+    if !blp {
+        return tga_bytes(img);
+    }
+    if img.width() < 4 || img.height() < 4 {
+        blp_bytes(&pad(img, img.width().max(4), img.height().max(4)), true)
+    } else {
+        blp_bytes(img, true)
+    }
 }
 
 pub struct RenderOptions {
@@ -693,9 +703,27 @@ impl Default for RenderOptions {
     }
 }
 
-/// Write `src` as a WoW texture at `out`. Returns the layout the addon needs.
+/// Write `src` as a WoW texture at `out` (.tga or .blp). Returns the layout the addon needs.
 pub fn render(src: &Path, out: &Path, opt: &RenderOptions) -> Result<Layout, String> {
-    let (mut frames, mut durations) = load_frames(src)?;
+    let data = std::fs::read(src).map_err(|e| e.to_string())?;
+    let (canvas, layout) = render_image(&data, opt)?;
+    save_texture(&canvas, out).map_err(|e| e.to_string())?;
+    Ok(layout)
+}
+
+/// Convert an emote file (WEBP/GIF/PNG bytes) to texture file contents, in memory.
+pub fn render_bytes(
+    data: &[u8],
+    blp: bool,
+    opt: &RenderOptions,
+) -> Result<(Layout, Vec<u8>), String> {
+    let (canvas, layout) = render_image(data, opt)?;
+    Ok((layout, texture_bytes(&canvas, blp)))
+}
+
+/// The texture image (power-of-two canvas, sprite sheet for animated emotes) and its layout.
+pub fn render_image(data: &[u8], opt: &RenderOptions) -> Result<(RgbaImage, Layout), String> {
+    let (mut frames, mut durations) = load_frames_bytes(data)?;
     if !opt.animate {
         frames.truncate(1);
         durations.truncate(1);
@@ -710,16 +738,18 @@ pub fn render(src: &Path, out: &Path, opt: &RenderOptions) -> Result<Layout, Str
     if frames.len() == 1 {
         let (tw, th) = (pow2(w), pow2(h));
         let canvas = pad(&resize_lanczos(&frames[0], w, h), tw, th);
-        save_texture(&canvas, out).map_err(|e| e.to_string())?;
-        return Ok(Layout {
-            w,
-            h,
-            tw,
-            th,
-            frames: 1,
-            cols: 1,
-            ms: 0,
-        });
+        return Ok((
+            canvas,
+            Layout {
+                w,
+                h,
+                tw,
+                th,
+                frames: 1,
+                cols: 1,
+                ms: 0,
+            },
+        ));
     }
 
     let (mut frames, mut durations) = decimate(&frames, &durations, opt.max_frames);
@@ -745,18 +775,20 @@ pub fn render(src: &Path, out: &Path, opt: &RenderOptions) -> Result<Layout, Str
             ((i / cols) * h) as i64,
         );
     }
-    save_texture(&canvas, out).map_err(|e| e.to_string())?;
     let total: u32 = durations.iter().sum();
     let ms = py_round(total as f64 / frames.len() as f64).max(10) as u32;
-    Ok(Layout {
-        w,
-        h,
-        tw,
-        th,
-        frames: frames.len() as u32,
-        cols,
-        ms,
-    })
+    Ok((
+        canvas,
+        Layout {
+            w,
+            h,
+            tw,
+            th,
+            frames: frames.len() as u32,
+            cols,
+            ms,
+        },
+    ))
 }
 
 /// Tiny transparent placeholder used to reserve a texture slot (.tga or .blp).
