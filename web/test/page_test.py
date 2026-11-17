@@ -45,9 +45,14 @@ FILES = {
 }
 
 
+FAILING = set()  # urls the fake 7TV answers with 503 (an overloaded server)
+
+
 def fake_7tv(route):
     url = route.request.url
     cors = {"Access-Control-Allow-Origin": "*"}
+    if url in FAILING:
+        return route.fulfill(status=503, body="busy", headers=cors)
     if url in JSON:
         return route.fulfill(status=200, body=json.dumps(JSON[url]), headers={**cors, "Content-Type": "application/json"})
     if url in FILES:
@@ -108,6 +113,19 @@ def main():
         assert page.is_hidden("#problemsBox")
         assert page.text_content("#version").strip() == "builder " + (SITE / "version.txt").read_text().strip()
         assert not errors, errors
+
+        # an emote 7TV keeps failing to send: the page suggests building again
+        FAILING.add(f"https://cdn.7tv.app/emote/{CHAN}/2x.webp")
+        page.check("#global")
+        page.click("#build")
+        page.wait_for_selector("#result:not([hidden])", timeout=60000)
+        status = page.text_content("#statusText")
+        assert "ready: 2 emotes." in status, status
+        assert page.is_visible("#retryNote"), "retry note shown"
+        note = page.text_content("#retryNote")
+        assert "didn't send one emote" in note and "Build again" in note, note
+        assert "testerHi" in page.text_content("#problems")
+        assert page.is_hidden("#slowNote")
         page.screenshot(path=str(Path("/tmp/page_test.png")), full_page=True)
         browser.close()
     httpd.shutdown()

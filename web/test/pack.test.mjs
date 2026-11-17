@@ -82,6 +82,7 @@ assert.match(why["notseventv's channel"], /doesn't use 7TV/);
 assert.match(why["NotARealEmote"], /couldn't find a 7TV emote called NotARealEmote/);
 assert.match(why["OMEGALUL bad|name"], /can't be used as an emote name/);
 assert.ok(why["Broken"], "broken image reported");
+assert.ok(!res.problems.some((p) => p.retry), "nothing here is worth retrying");
 assert.equal(res.problems.length, 5, JSON.stringify(res.problems));
 assert.deepEqual(res.channels, ["tester"]);
 assert.deepEqual(res.sets, ["Cool Set"]);
@@ -90,6 +91,55 @@ assert.equal(res.emotes, 8);
 assert.equal(res.textures, 4, "one texture per 7TV id");
 assert.ok(events.some((e) => e.phase === "download" && e.done === e.total && e.total === 5));
 assert.ok(!calls.some((u) => u.includes(ZW)), "zero-width emote never downloaded");
+
+// a server that goes quiet is given up on (without holding up the rest), a download that stalls
+// halfway is retried, and a slow but steady one is left to finish ---------------------------------
+{
+  const aborted = (signal, fail) => signal.addEventListener("abort", () => fail(new DOMException("aborted", "AbortError")));
+  const hang = (signal) => new Promise((_, reject) => aborted(signal, reject));
+  // sends `bytes` in `pieces` chunks `gap` ms apart; with stallAfter, stops sending after that many
+  const stream = (bytes, signal, { pieces = 6, gap = 20, stallAfter = Infinity } = {}) =>
+    new Response(
+      new ReadableStream({
+        async start(ctl) {
+          aborted(signal, (e) => ctl.error(e));
+          const step = Math.ceil(bytes.length / pieces);
+          for (let i = 0, n = 0; i < bytes.length; i += step, n++) {
+            if (n >= stallAfter) return; // never closes
+            await new Promise((r) => setTimeout(r, gap));
+            if (signal.aborted) return;
+            ctl.enqueue(new Uint8Array(bytes.subarray(i, i + step)));
+          }
+          ctl.close();
+        },
+      }),
+    );
+  let tries = 0;
+  const slowFetch = async (url, init) => {
+    if (url.includes(ANIM)) return hang(init.signal); // catJAM: never answers
+    if (url.includes(STAT)) {
+      const file = files[url];
+      // OMEGALUL: stalls halfway the first time, then trickles in slowly (longer than idleMs in
+      // total, but never quiet for that long)
+      return tries++ === 0
+        ? stream(file, init.signal, { stallAfter: 3 })
+        : stream(file, init.signal, { pieces: 8, gap: 25 });
+    }
+    return fakeFetch(url, init);
+  };
+  const started = Date.now();
+  const slow = await buildPack(
+    { channels: [], global: true, extras: [], blp: true },
+    { wasm, fetch: slowFetch, now: () => 1800000000, idleMs: 120 },
+  );
+  const why = Object.fromEntries(slow.problems.map((p) => [p.what, p.why]));
+  assert.match(why["catJAM"] || "", /stopped answering/, JSON.stringify(slow.problems));
+  assert.equal(slow.problems[0].retry, true, "a download that timed out is worth retrying");
+  assert.equal(slow.problems.length, 1, JSON.stringify(slow.problems));
+  assert.equal(slow.emotes, 1, "OMEGALUL built after a retry");
+  assert.equal(tries, 2, "the stalled download was retried once");
+  assert.ok(Date.now() - started < 10000, "gave up on the stuck download");
+}
 
 // unpack with Python's zipfile to make sure other tools read it
 const tmp = fs.mkdtempSync("/tmp/packtest-");

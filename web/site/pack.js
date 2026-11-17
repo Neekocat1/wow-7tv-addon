@@ -71,6 +71,28 @@ class NotFound extends Error {}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// A response's whole body, calling `alive()` whenever more of it arrives.
+async function readBody(res, alive) {
+  if (!res.body) return new Uint8Array(await res.arrayBuffer());
+  const reader = res.body.getReader();
+  const parts = [];
+  let size = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    alive();
+    parts.push(value);
+    size += value.length;
+  }
+  const out = new Uint8Array(size);
+  let at = 0;
+  for (const p of parts) {
+    out.set(p, at);
+    at += p.length;
+  }
+  return out;
+}
+
 // A Twitch login from "name", "@name" or a twitch.tv link; null if it can't be one.
 export function channelLogin(text) {
   let s = String(text || "").trim();
@@ -109,26 +131,58 @@ export async function buildPack(opts, env) {
   const { wasm, now } = env;
   const fetchFn = env.fetch;
   const progress = env.progress || (() => {});
-  const concurrency = env.concurrency || 6;
+  // 7TV's image server is often slow (their developers blame DDoS attacks): a file can take 10-30 s
+  // or never arrive. Many downloads at once keep the total time down, and a download that goes
+  // quiet for `idleMs` is dropped and retried so it can't hold up a slot forever. Slow but steady
+  // downloads are left alone, since on a slow connection a big animated emote can take a while.
+  const concurrency = env.concurrency || 16;
+  const idleMs = env.idleMs || 25000;
   const blp = opts.blp !== false;
   const problems = []; // { what, why }
 
   async function request(url, init, kind) {
+    const host = new URL(url).host;
+    const quiet = `${host} stopped answering (nothing for ${Math.round(idleMs / 1000)} s)`;
     let last;
     for (let attempt = 0; attempt < 3; attempt++) {
-      let res;
+      const abort = new AbortController();
+      let timer = setTimeout(() => abort.abort(), idleMs);
+      const alive = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => abort.abort(), idleMs);
+      };
       try {
-        res = await fetchFn(url, init);
-      } catch (e) {
-        last = new Error(`couldn't reach ${new URL(url).host} (${e.message})`);
-        await sleep(800 * (attempt + 1));
-        continue;
+        let res;
+        try {
+          res = await fetchFn(url, { ...init, signal: abort.signal });
+        } catch (e) {
+          last = abort.signal.aborted ? new Error(quiet) : new Error(`couldn't reach ${host} (${e.message})`);
+          await sleep(800 * (attempt + 1));
+          continue;
+        }
+        if (res.status === 404 || res.status === 400) throw new NotFound(url);
+        if (res.ok) {
+          let body;
+          try {
+            body = await readBody(res, alive);
+          } catch (e) {
+            last = abort.signal.aborted ? new Error(quiet) : new Error(`the download from ${host} broke off (${e.message})`);
+            await sleep(800 * (attempt + 1));
+            continue;
+          }
+          if (kind === "bytes") return body;
+          try {
+            return JSON.parse(dec.decode(body));
+          } catch {
+            throw new Error(`${host} sent something unreadable`);
+          }
+        }
+        last = new Error(`${host} answered ${res.status}`);
+        if (res.status !== 429 && res.status < 500) break;
+        await sleep(1000 * (attempt + 1));
+      } finally {
+        clearTimeout(timer);
       }
-      if (res.status === 404 || res.status === 400) throw new NotFound(url);
-      if (res.ok) return kind === "bytes" ? new Uint8Array(await res.arrayBuffer()) : res.json();
-      last = new Error(`${new URL(url).host} answered ${res.status}`);
-      if (res.status !== 429 && res.status < 500) break;
-      await sleep(1000 * (attempt + 1));
     }
     throw last;
   }
@@ -213,13 +267,21 @@ export async function buildPack(opts, env) {
       } else {
         for (const [, list] of sources) em = em || list.find((x) => x.name === ref.value);
         if (!em) {
-          const res = await fetchFn(url("gql"), {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(wasm.call(OP.searchBody, { name: ref.value })),
-          });
-          if (!res.ok) throw new Error(`7TV search answered ${res.status}`);
-          em = wasm.call(OP.searchPick, { json: await res.json(), name: ref.value });
+          let found;
+          try {
+            found = await request(
+              url("gql"),
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(wasm.call(OP.searchBody, { name: ref.value })),
+              },
+              "json",
+            );
+          } catch (e) {
+            throw e instanceof NotFound ? new Error("7TV search didn't accept that name") : e;
+          }
+          em = wasm.call(OP.searchPick, { json: found, name: ref.value });
         }
         if (!em) throw new Error(`couldn't find a 7TV emote called ${ref.value}; use its 7tv.app link instead`);
       }
@@ -251,12 +313,19 @@ export async function buildPack(opts, env) {
       const [id, { url: fileUrl, names }] = tasks[next++];
       try {
         if (!fileUrl) throw new Error("7TV has no usable image for it");
-        const bytes = await getBytes(fileUrl);
+        let bytes;
+        try {
+          bytes = await getBytes(fileUrl);
+        } catch (e) {
+          // worth another try later, unless 7TV says the file doesn't exist
+          if (!(e instanceof NotFound)) e.retry = true;
+          throw e;
+        }
         const { layout, data } = wasm.convert(bytes, blp);
         built[id] = layout;
         files.push({ name: `SevenTVEmotes_Local/${wasm.call(OP.texturePath, { id, blp })}`, data });
       } catch (e) {
-        problems.push({ what: names.join(", "), why: e.message });
+        problems.push({ what: names.join(", "), why: e.message, retry: !!e.retry });
       }
       done++;
       progress({ phase: "download", done, total: tasks.length });

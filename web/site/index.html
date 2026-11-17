@@ -54,12 +54,14 @@
     <section id="status" class="status" hidden aria-live="polite">
       <div class="status-line"><span id="statusText"></span><span id="statusCount"></span></div>
       <div class="bar"><div id="barFill"></div></div>
+      <p id="slowNote" class="hint" hidden>This can take a few minutes: 7TV's image server is often slow. Keep this tab open.</p>
       <div id="result" hidden>
         <a id="download" class="download" download="SevenTVEmotes_Local.zip">Download SevenTVEmotes_Local.zip</a>
         <span id="resultInfo"></span>
       </div>
       <details id="problemsBox" hidden>
         <summary id="problemsSummary"></summary>
+        <p id="retryNote" class="hint" hidden></p>
         <ul id="problems"></ul>
       </details>
     </section>
