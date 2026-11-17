@@ -196,6 +196,7 @@ local function RequestLabel(r)
     if r.kind == "remove" then return "Remove " .. ref end
     if r.kind == "channel" then return "Add " .. ref .. "'s channel" end
     if r.kind == "unchannel" then return "Remove " .. ref .. "'s channel" end
+    if r.kind == "order" then return "Change channel priority" end
     return tostring(r.kind) .. " " .. ref
 end
 
@@ -486,26 +487,54 @@ local function BuildAddPage(page)
     p.feedback:SetWidth(690)
     y = y - 30
 
-    heading("Your channels")
+    local chanHead = heading("Your channels")
+    local chanHint = Text(page, "GameFontDisableSmall",
+        "If two channels have an emote with the same name, the higher one wins.")
+    chanHint:SetPoint("LEFT", chanHead, "RIGHT", 10, 0)
     p.chanRows = {}
+    p.chanOffset = 0
+    local function scroll(_, delta)
+        p.chanOffset = p.chanOffset - delta
+        p:Refresh()
+    end
     for i = 1, 5 do
         local row = CreateFrame("Frame", nil, page, "BackdropTemplate")
         row:SetSize(560, 26)
         row:SetPoint("TOPLEFT", 0, y - (i - 1) * 28)
         Backdrop(row, PANEL)
+        row:EnableMouseWheel(true)
+        row:SetScript("OnMouseWheel", scroll)
+        row.rank = Text(row, "GameFontDisable", "", "RIGHT")
+        row.rank:SetPoint("LEFT", 4, 0)
+        row.rank:SetWidth(22)
         row.text = Text(row, "GameFontHighlight", "")
-        row.text:SetPoint("LEFT", 8, 0)
-        row.status = Text(row, "GameFontDisableSmall", "", "RIGHT")
-        row.status:SetPoint("RIGHT", -100, 0)
+        row.text:SetPoint("LEFT", 32, 0)
         row.btn = Button(row, "Remove", 84, 20, function(self)
             ns.QueueRequest("unchannel", self.login, nil, "Removing " .. self.login .. "'s channel", true)
             UI:Refresh()
         end)
         row.btn:SetPoint("RIGHT", -4, 0)
+        local function move(delta)
+            return function(self)
+                ns.MoveChannel(self.login, delta)
+                -- keep the moved channel in view
+                local idx = self.index + delta
+                if idx <= p.chanOffset then p.chanOffset = idx - 1 end
+                if idx > p.chanOffset + #p.chanRows then p.chanOffset = idx - #p.chanRows end
+                UI:Refresh()
+            end
+        end
+        row.down = Button(row, "Down", 48, 20, move(1))
+        row.down:SetPoint("RIGHT", row.btn, "LEFT", -4, 0)
+        row.up = Button(row, "Up", 48, 20, move(-1))
+        row.up:SetPoint("RIGHT", row.down, "LEFT", -4, 0)
+        row.status = Text(row, "GameFontDisableSmall", "", "RIGHT")
+        row.status:SetPoint("RIGHT", row.up, "LEFT", -8, 0)
         p.chanRows[i] = row
     end
     p.more = Text(page, "GameFontDisableSmall", "")
     p.more:SetPoint("TOPLEFT", 0, y - 5 * 28)
+    p.more:SetWidth(690)
 
     local function feedback(ok, msg)
         p.feedback:SetText((ok and GREEN or RED) .. msg .. "|r")
@@ -550,42 +579,47 @@ local function BuildAddPage(page)
         self.addBtn:SetActive(enabled)
         self.chanBtn:SetActive(enabled)
 
-        -- channels: helper's list + queued changes
-        local rows, seen = {}, {}
-        local pendingUn, pendingAdd = {}, {}
-        for _, r in ipairs(ns.db.queue) do
-            if r.kind == "unchannel" then pendingUn[r.ref] = true end
-            if r.kind == "channel" then pendingAdd[r.ref] = true end
-        end
-        if H and type(H.channels) == "table" then
-            for _, login in ipairs(H.channels) do
-                seen[login] = true
-                rows[#rows + 1] = { login = login, status = pendingUn[login] and (YELLOW .. "removal queued") or "" }
-            end
-        end
-        for login in pairs(pendingAdd) do
-            if not seen[login] then rows[#rows + 1] = { login = login, status = YELLOW .. "queued", queued = true } end
-        end
-        table.sort(rows, function(a, b) return a.login < b.login end)
+        -- channels by priority, with queued changes applied
+        local rows = ns.ChannelList()
+        local canOrder = enabled and ns.HelperSupports("order")
+        local shown = #self.chanRows
+        self.chanOffset = math.max(0, math.min(self.chanOffset, #rows - shown))
         for i, row in ipairs(self.chanRows) do
-            local r = rows[i]
+            local idx = self.chanOffset + i
+            local r = rows[idx]
             if r then
+                row.rank:SetText(idx .. ".")
                 row.text:SetText(r.login)
-                row.status:SetText(r.status)
+                row.status:SetText(r.queued and (YELLOW .. "queued") or r.removing and (YELLOW .. "removal queued") or "")
                 row.btn.login = r.login
                 row.btn:SetShown(not r.queued)
-                row.btn:SetActive(enabled and not pendingUn[r.login])
+                row.btn:SetActive(enabled and not r.removing)
+                for _, b in ipairs({ row.up, row.down }) do
+                    b.login, b.index = r.login, idx
+                    b:SetShown(#rows > 1)
+                    b.tip = not canOrder and enabled and "Update the 7TV Emotes Helper app to change channel priority." or nil
+                end
+                row.up:SetActive(canOrder and idx > 1)
+                row.down:SetActive(canOrder and idx < #rows)
                 row:Show()
             else
                 row:Hide()
             end
+        end
+        local notes = {}
+        if #rows > shown then
+            notes[#notes + 1] = format("Showing %d-%d of %d (scroll for more).", self.chanOffset + 1,
+                math.min(#rows, self.chanOffset + shown), #rows)
+        end
+        if ns.QueuedOrder() then
+            notes[#notes + 1] = YELLOW .. "New priority queued:|r click Send on the 7TV bar (or /reload) to apply it."
         end
         if #rows == 0 then
             self.more:SetText("None yet.")
             self.more:ClearAllPoints()
             self.more:SetPoint("TOPLEFT", self.chanRows[1], "TOPLEFT", 0, 0)
         else
-            self.more:SetText(#rows > #self.chanRows and format("... and %d more", #rows - #self.chanRows) or "")
+            self.more:SetText(table.concat(notes, "  "))
             self.more:ClearAllPoints()
             self.more:SetPoint("TOPLEFT", self.chanRows[#self.chanRows], "BOTTOMLEFT", 0, -6)
         end

@@ -67,6 +67,7 @@ local HELP = {
     "  /7tv add <7tv link or name> [alias] - add one emote",
     "  /7tv channel <twitch name> - add a streamer's 7TV emotes",
     "  /7tv unchannel <twitch name> - remove them again",
+    "  /7tv channels - your channels by priority (reorder them on the Add tab)",
     "  /7tv remove <name> - remove an emote",
     "  /7tv queue - show requests waiting for the helper",
     "  /7tv helper - helper app status",
@@ -114,6 +115,20 @@ local function Slash(input)
         if not login then ns.Print("Usage: /7tv " .. cmd .. " <twitch name>") return end
         login = login:lower()
         ns.QueueRequest(cmd, login, nil, (cmd == "channel" and "Channel " or "Removing channel ") .. login)
+
+    elseif cmd == "channels" then
+        local list = ns.ChannelList()
+        if #list == 0 then
+            ns.Print("You haven't added any channels. /7tv channel <twitch name> adds one.")
+        else
+            ns.Print("Your channels (if two have an emote with the same name, the higher one wins):")
+            for i, row in ipairs(list) do
+                local note = row.queued and " |cffffd100(queued)|r" or row.removing and " |cffffd100(removal queued)|r" or ""
+                ns.Print(format("  %d. %s%s", i, row.login, note))
+            end
+            if ns.QueuedOrder() then ns.Print("|cffffd100New priority queued:|r click Send on the 7TV bar (or /reload) to apply it.") end
+            ns.Print("Change the order with Up and Down on the Add tab of /7tv.")
+        end
 
     elseif cmd == "queue" then
         local q = ns.db.queue

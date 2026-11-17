@@ -161,6 +161,11 @@ pub struct State {
     /// names hidden from channel/global sources
     #[serde(default)]
     pub removed: Vec<String>,
+    /// Twitch channels by priority, highest first: when two channels have an emote with the same
+    /// name, the one higher in this list wins. Channels missing from it (added before 0.7, or
+    /// since the list was last saved) count as newer and go on top, newest first.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub channel_order: Vec<String>,
     /// 7TV id -> texture
     #[serde(default)]
     pub images: IndexMap<String, ImageInfo>,
@@ -660,22 +665,41 @@ impl Library {
 
     // ------------------------------------------------------------------ desired emote set
 
+    /// Sources from lowest to highest priority: 7TV globals, then channels (the bottom of the
+    /// channel list first), then emote sets added from links (oldest first), then emotes added
+    /// one by one. A later source wins a name.
     fn sources_in_order(&self) -> Vec<(String, Vec<Emote>)> {
-        let mut ordered: Vec<(&String, &Source)> = self.state.sources.iter().collect();
-        ordered.sort_by(|a, b| {
-            let ka = (if a.1.kind == "global" { 0 } else { 1 }, a.1.added);
-            let kb = (if b.1.kind == "global" { 0 } else { 1 }, b.1.added);
-            ka.partial_cmp(&kb).unwrap_or(std::cmp::Ordering::Equal)
-        });
-        let mut out: Vec<(String, Vec<Emote>)> = ordered
-            .into_iter()
+        let src = &self.state.sources;
+        let mut out: Vec<(String, Vec<Emote>)> = src
+            .iter()
+            .filter(|(_, s)| s.kind == "global")
             .map(|(k, s)| (k.clone(), s.emotes.clone()))
             .collect();
+        for login in self.channels().iter().rev() {
+            let key = format!("channel:{login}");
+            if let Some(s) = src.get(&key) {
+                out.push((key, s.emotes.clone()));
+            }
+        }
+        let mut others: Vec<(&String, &Source)> = src
+            .iter()
+            .filter(|(k, s)| s.kind != "global" && !k.starts_with("channel:"))
+            .collect();
+        others.sort_by(|a, b| {
+            a.1.added
+                .partial_cmp(&b.1.added)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        out.extend(
+            others
+                .into_iter()
+                .map(|(k, s)| (k.clone(), s.emotes.clone())),
+        );
         out.push(("manual".into(), self.state.manual.clone()));
         out
     }
 
-    /// name -> (emote, source key); later sources win (global < channels < manual).
+    /// name -> (emote, source key); later sources win (see `sources_in_order`).
     pub fn desired_with_sources(&self) -> IndexMap<String, (Emote, String)> {
         crate::pack::resolve(&self.sources_in_order(), &self.state.removed)
     }
@@ -927,16 +951,27 @@ impl Library {
 
     // ------------------------------------------------------------------ Local.lua
 
+    /// The user's Twitch channels by priority, highest first (see `State::channel_order`).
     pub fn channels(&self) -> Vec<String> {
-        let mut v: Vec<String> = self
+        let have: Vec<(&str, f64)> = self
             .state
             .sources
-            .keys()
-            .filter_map(|k| k.strip_prefix("channel:"))
-            .map(String::from)
+            .iter()
+            .filter_map(|(k, s)| k.strip_prefix("channel:").map(|l| (l, s.added)))
             .collect();
-        v.sort();
-        v
+        let order = &self.state.channel_order;
+        let mut fresh: Vec<&(&str, f64)> = have
+            .iter()
+            .filter(|(l, _)| !order.iter().any(|o| o == l))
+            .collect();
+        fresh.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+        let mut out: Vec<String> = fresh.into_iter().map(|(l, _)| l.to_string()).collect();
+        for l in order {
+            if have.iter().any(|(h, _)| h == l) && !out.contains(l) {
+                out.push(l.clone());
+            }
+        }
+        out
     }
 
     pub fn write_lua(
@@ -1127,9 +1162,12 @@ impl Library {
 
     // ------------------------------------------------------------------ requests
 
+    /// An emote by name from the user's sources, preferring the highest-priority one (the emote
+    /// the name means in chat).
     fn find_cached(&self, name: &str) -> Option<Emote> {
         self.sources_in_order()
             .into_iter()
+            .rev()
             .flat_map(|(_, ems)| ems)
             .find(|em| em.name == name)
     }
@@ -1148,13 +1186,16 @@ impl Library {
             "remove" => Ok(self.req_remove(&reference)),
             "channel" => self.req_channel(&reference.to_lowercase()),
             "unchannel" => {
-                let key = format!("channel:{}", reference.to_lowercase());
+                let login = reference.to_lowercase();
+                let key = format!("channel:{login}");
                 Ok(if self.state.sources.shift_remove(&key).is_none() {
                     ReqResult::fail(format!("You haven't added {reference}'s channel."))
                 } else {
+                    self.state.channel_order.retain(|l| *l != login);
                     ReqResult::ok(format!("Removed {reference}'s channel emotes."))
                 })
             }
+            "order" => Ok(self.req_order(&reference)),
             _ => {
                 let shown = req.kind.clone().unwrap_or_else(|| "None".into());
                 return Ok(ReqResult::fail(format!("Unknown request '{shown}'.")));
@@ -1261,6 +1302,7 @@ impl Library {
             .map(|p| p.added)
             .unwrap_or_else(now);
         let n = ems.len();
+        let new_channel = !self.state.sources.contains_key(&key);
         self.state.sources.insert(
             key,
             Source {
@@ -1273,9 +1315,35 @@ impl Library {
                 ..Default::default()
             },
         );
+        if new_channel {
+            // a new channel goes to the top of the list (channels() puts it there)
+            self.state.channel_order = self.channels();
+        }
         Ok(ReqResult::ok(format!(
             "Added {n} emotes from {login}'s 7TV channel."
         )))
+    }
+
+    /// New channel priority from the addon: logins separated by commas, highest first. Channels
+    /// the request doesn't mention (added after the addon sent it) stay on top.
+    fn req_order(&mut self, reference: &str) -> ReqResult {
+        let current = self.channels();
+        let mut want: Vec<String> = Vec::new();
+        for login in reference.split(',').map(|l| l.trim().to_lowercase()) {
+            if current.contains(&login) && !want.contains(&login) {
+                want.push(login);
+            }
+        }
+        if want.is_empty() {
+            return ReqResult::fail("None of those channels are in your list any more.");
+        }
+        let mut order: Vec<String> = current.into_iter().filter(|l| !want.contains(l)).collect();
+        order.extend(want);
+        self.state.channel_order = order;
+        ReqResult::ok(format!(
+            "Channel priority saved: {}.",
+            self.channels().join(" > ")
+        ))
     }
 
     /// Adjust a request's message after textures were built, then record it.

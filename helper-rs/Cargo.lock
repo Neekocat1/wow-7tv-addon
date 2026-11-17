@@ -573,7 +573,7 @@ dependencies = [
 
 [[package]]
 name = "seventv-helper"
-version = "0.6.1"
+version = "0.7.0"
 dependencies = [
  "ab_glyph",
  "chrono",

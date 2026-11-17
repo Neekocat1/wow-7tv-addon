@@ -15,7 +15,7 @@
 
 WoW addons can't download anything, so this addon **doesn't include any emotes by itself**. There are two ways to get them (links at the bottom of this page):
 
-**Option 1: emote pack, nothing to install.** On the pack builder web page, enter one or more Twitch channels (and/or individual emotes), click Build, and download a zip. Extract it into `World of Warcraft\_forever_\Interface\AddOns` and restart WoW. To change your emotes, build a new pack.
+**Option 1: emote pack, nothing to install.** On the pack builder web page, enter one or more Twitch channels (the first listed wins if two have an emote with the same name) and/or individual emotes, click Build, and download a zip. Extract it into `World of Warcraft\_forever_\Interface\AddOns` and restart WoW. To change your emotes, build a new pack.
 
 **Option 2: the 7TV Emotes Helper app (Windows).** A small free, open-source app. Run it once: it finds WoW: Forever, sets up the emote folder and runs quietly in the system tray. After that you add emotes from inside the game:
 
@@ -24,6 +24,7 @@ WoW addons can't download anything, so this addon **doesn't include any emotes b
 | `/7tv add <7tv.app link or name> [new name]` | add one emote, optionally under another name |
 | `/7tv channel <twitch name>` | add a streamer's 7TV emotes |
 | `/7tv unchannel <twitch name>` | remove them again |
+| `/7tv channels` | your channels by priority: if two have an emote with the same name, the higher one wins (reorder them on the Add tab of `/7tv`) |
 | `/7tv remove <name>` | remove an emote |
 
 7TV's global emotes are added automatically. Requests are sent when you reload; a status bar above chat shows the helper's progress and tells you when to reload again.

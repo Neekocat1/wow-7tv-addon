@@ -140,11 +140,11 @@ export async function buildPack(opts, env) {
   const blp = opts.blp !== false;
   const problems = []; // { what, why }
 
-  async function request(url, init, kind) {
+  async function request(url, init, kind, tries = 3) {
     const host = new URL(url).host;
     const quiet = `${host} stopped answering (nothing for ${Math.round(idleMs / 1000)} s)`;
     let last;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < tries; attempt++) {
       const abort = new AbortController();
       let timer = setTimeout(() => abort.abort(), idleMs);
       const alive = () => {
@@ -187,7 +187,7 @@ export async function buildPack(opts, env) {
     throw last;
   }
   const getJson = (url) => request(url, undefined, "json");
-  const getBytes = (url) => request(url, undefined, "bytes");
+  const getBytes = (url, tries) => request(url, undefined, "bytes", tries);
   const url = (kind, arg = "") => wasm.call(OP.url, { kind, arg });
 
   const sources = []; // [key, emotes] in priority order
@@ -205,6 +205,9 @@ export async function buildPack(opts, env) {
     }
   }
 
+  // Channels in the order given, highest priority first: if two have an emote with the same name,
+  // the one listed first wins. (Sources go lowest priority first, so they're added reversed.)
+  const channelSources = [];
   for (const login of opts.channels || []) {
     progress({ phase: "lookup", text: `${login}'s channel` });
     try {
@@ -227,13 +230,15 @@ export async function buildPack(opts, env) {
       const list = wasm.call(OP.setEmotes, { json: set });
       if (list.length === 0) throw new Error("this channel has no 7TV emotes");
       const key = `channel:${login}`;
-      sources.push([key, list]);
+      channelSources.push([key, list]);
       labels[key] = wasm.call(OP.sourceLabel, { key });
       channels.push(login);
     } catch (e) {
       problems.push({ what: `${login}'s channel`, why: e.message });
     }
   }
+
+  sources.push(...channelSources.reverse());
 
   const manual = [];
   for (const extra of opts.extras || []) {
@@ -265,7 +270,8 @@ export async function buildPack(opts, env) {
           throw e instanceof NotFound ? new Error("couldn't find that emote on 7TV; check the link") : e;
         }
       } else {
-        for (const [, list] of sources) em = em || list.find((x) => x.name === ref.value);
+        // the emote that name means in the pack so far (highest priority source first)
+        for (const [, list] of [...sources].reverse()) em = em || list.find((x) => x.name === ref.value);
         if (!em) {
           let found;
           try {
@@ -317,9 +323,22 @@ export async function buildPack(opts, env) {
         try {
           bytes = await getBytes(fileUrl);
         } catch (e) {
-          // worth another try later, unless 7TV says the file doesn't exist
-          if (!(e instanceof NotFound)) e.retry = true;
-          throw e;
+          if (e instanceof NotFound) throw e;
+          // 7TV's server tends to break off big files (large animated emotes) when it's busy. The
+          // half-size version is about a third of the size and is scaled up to the same size in
+          // chat, so a slightly softer emote beats a missing one.
+          const small = fileUrl.replace(/\/2x\.(\w+)$/, "/1x.$1");
+          if (small !== fileUrl) {
+            try {
+              bytes = await getBytes(small, 2);
+            } catch {
+              // report the original problem
+            }
+          }
+          if (!bytes) {
+            e.retry = true; // worth another try later
+            throw e;
+          }
         }
         const { layout, data } = wasm.convert(bytes, blp);
         built[id] = layout;

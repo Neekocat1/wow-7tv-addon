@@ -49,6 +49,8 @@ struct FakeHttp {
     hosts: HashMap<&'static str, Value>,
     glob: Value,
     channel: Value,
+    /// a second channel ("other") whose testerHi is a different emote than tester's
+    other: Value,
 }
 
 impl FakeHttp {
@@ -85,6 +87,9 @@ impl FakeHttp {
             active(CHAN, "testerHi", false, &hosts[CHAN], 0),
             active(STAT, "Clap", false, &hosts[STAT], 0),
         ]}});
+        let other = json!({"emote_set": {"id": "SET2", "name": "other's set", "emotes": [
+            active(WIDE, "testerHi", false, &hosts[WIDE], 0),
+        ]}});
         Self {
             online: AtomicBool::new(true),
             calls: Mutex::new(Vec::new()),
@@ -92,6 +97,7 @@ impl FakeHttp {
             hosts,
             glob,
             channel,
+            other,
         }
     }
 
@@ -117,9 +123,15 @@ impl Http for FakeHttp {
         if url.ends_with("/users/twitch/123") {
             return Ok(self.channel.clone());
         }
+        if url.ends_with("/users/twitch/456") {
+            return Ok(self.other.clone());
+        }
         if url.contains("ivr.fi") {
             if url.ends_with("tester") {
                 return Ok(json!([{"id": "123", "login": "tester"}]));
+            }
+            if url.ends_with("other") {
+                return Ok(json!([{"id": "456", "login": "other"}]));
             }
             return Ok(json!([]));
         }
@@ -507,6 +519,84 @@ fn unchannel_and_readd() {
     assert!(!local_lua(&f).contains(r#"["testerHi"]"#));
     assert!(st["images"].get(CHAN).is_none());
     assert!(st["slots"][&slot]["id"].is_null() && st["slots"][&slot]["freed"].as_f64().is_some());
+}
+
+/// The 7TV id the addon gets for an emote name, from Local.lua's emote table.
+fn emote_id(lua: &str, name: &str) -> Option<String> {
+    let line = lua
+        .lines()
+        .find(|l| l.trim_start().starts_with(&format!("[\"{name}\"] = {{")))?;
+    [ANIM, STAT, WIDE, CHAN]
+        .iter()
+        .find(|id| line.contains(*id))
+        .map(|id| id.to_string())
+}
+
+#[test]
+fn channel_priority_decides_same_name_emotes() {
+    let f = fake();
+    let mut svc = make_service(&f);
+    // a newly added channel goes to the top of the list, so its testerHi wins
+    let mut queue = vec![req("a", "channel", "tester"), req("b", "channel", "other")];
+    write_sv(&f, queue.clone());
+    svc.run_once();
+    assert_eq!(emote_id(&local_lua(&f), "testerHi").as_deref(), Some(WIDE));
+    assert_eq!(state(&f)["channel_order"], json!(["other", "tester"]));
+    assert!(
+        local_lua(&f).contains(r#""other", "tester""#),
+        "status lists channels by priority"
+    );
+
+    // move tester up: its testerHi wins now
+    queue.push(req("c", "order", "tester,other"));
+    write_sv(&f, queue.clone());
+    svc.run_once();
+    assert_eq!(emote_id(&local_lua(&f), "testerHi").as_deref(), Some(CHAN));
+    assert_eq!(state(&f)["channel_order"], json!(["tester", "other"]));
+    let msg = state(&f)["processed"]["c"]["msg"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(msg.contains("tester > other"), "{msg}");
+
+    // re-adding a channel (a refresh) keeps its place; an order naming unknown channels is
+    // tidied up, and channels it leaves out stay on top
+    queue.push(req("d", "channel", "other"));
+    queue.push(req("e", "order", "nobody, Other"));
+    write_sv(&f, queue.clone());
+    svc.run_once();
+    assert_eq!(state(&f)["channel_order"], json!(["tester", "other"]));
+    assert_eq!(emote_id(&local_lua(&f), "testerHi").as_deref(), Some(CHAN));
+    queue.push(req("f", "order", "nobody"));
+    write_sv(&f, queue.clone());
+    svc.run_once();
+    assert_eq!(state(&f)["processed"]["f"]["ok"], json!(false));
+
+    // removing the winner hands the name to the next channel
+    queue.push(req("g", "unchannel", "tester"));
+    write_sv(&f, queue);
+    svc.run_once();
+    assert_eq!(state(&f)["channel_order"], json!(["other"]));
+    assert_eq!(emote_id(&local_lua(&f), "testerHi").as_deref(), Some(WIDE));
+}
+
+#[test]
+fn channels_without_a_saved_order_rank_newest_first() {
+    // helper_state.json from before 0.7 has no channel_order: the newest channel wins, as before
+    let f = fake();
+    let mut svc = make_service(&f);
+    write_sv(
+        &f,
+        vec![req("a", "channel", "tester"), req("b", "channel", "other")],
+    );
+    svc.run_once();
+    {
+        let lib = lib(&mut svc);
+        lib.state.channel_order.clear();
+        lib.state.sources.get_mut("channel:tester").unwrap().added = now() + 50.0;
+        assert_eq!(lib.channels(), vec!["tester", "other"]);
+        assert_eq!(lib.desired()["testerHi"].id, CHAN);
+    }
 }
 
 #[test]

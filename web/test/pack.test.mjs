@@ -37,6 +37,8 @@ const json = {
   "https://api.ivr.fi/v2/twitch/user?login=tester": [{ id: "123", login: "tester" }],
   "https://api.ivr.fi/v2/twitch/user?login=nobody": [],
   "https://api.ivr.fi/v2/twitch/user?login=notseventv": [{ id: "999" }],
+  "https://api.ivr.fi/v2/twitch/user?login=other": [{ id: "456", login: "other" }],
+  "https://7tv.io/v3/users/twitch/456": { emote_set: { id: "SET2", name: "other's set", emotes: [active(WIDE, "testerHi", false)] } },
   "https://7tv.io/v3/users/twitch/123": { emote_set: { id: "SET1", name: "tester's set", emotes: [active(CHAN, "testerHi", false), active(STAT, "Clap", false), active(BROKEN, "Broken", false)] } },
   [`https://7tv.io/v3/emotes/${WIDE}`]: { id: WIDE, name: "WideDank", animated: false, host: H[WIDE] },
   "https://7tv.io/v3/emote-sets/01HKQT8EWR000ESSWF3625XCS4": { name: "Cool Set", emotes: [active(WIDE, "SetWide", false)] },
@@ -138,7 +140,34 @@ assert.ok(!calls.some((u) => u.includes(ZW)), "zero-width emote never downloaded
   assert.equal(slow.problems.length, 1, JSON.stringify(slow.problems));
   assert.equal(slow.emotes, 1, "OMEGALUL built after a retry");
   assert.equal(tries, 2, "the stalled download was retried once");
-  assert.ok(Date.now() - started < 10000, "gave up on the stuck download");
+  assert.ok(Date.now() - started < 20000, "gave up on the stuck download");
+}
+
+// a big file 7TV keeps breaking off: the half-size version is used instead -----------------------
+{
+  const seen = [];
+  const busyFetch = async (url, init) => {
+    seen.push(url);
+    if (url === `https://cdn.test/emote/${ANIM}/2x.webp`) return new Response("busy", { status: 503 });
+    if (url === `https://cdn.test/emote/${ANIM}/1x.webp`) return new Response(files[`https://cdn.test/emote/${ANIM}/2x.webp`]);
+    return fakeFetch(url, init);
+  };
+  const r = await buildPack({ channels: [], global: true, extras: [], blp: true }, { wasm, fetch: busyFetch, now: () => 1800000000 });
+  assert.equal(r.problems.length, 0, JSON.stringify(r.problems));
+  assert.equal(r.emotes, 2, "catJAM built from the half-size file");
+  assert.ok(seen.includes(`https://cdn.test/emote/${ANIM}/1x.webp`));
+}
+
+// channel priority: if two channels have an emote with the same name, the one listed first wins ---
+{
+  const winner = async (channels) => {
+    const r = await buildPack({ channels, global: false, extras: [], blp: true, compressZip: false }, { wasm, fetch: fakeFetch, now: () => 1800000000 });
+    const lua = Buffer.from(r.zip).toString("latin1");
+    const line = lua.split("\n").find((l) => l.trim().startsWith('["testerHi"] = {'));
+    return [CHAN, WIDE].find((id) => line && line.includes(id));
+  };
+  assert.equal(await winner(["tester", "other"]), CHAN, "tester listed first wins");
+  assert.equal(await winner(["other", "tester"]), WIDE, "other listed first wins");
 }
 
 // unpack with Python's zipfile to make sure other tools read it

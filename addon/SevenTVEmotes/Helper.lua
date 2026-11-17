@@ -71,7 +71,7 @@ function ns.NotifyQueueChanged(reason)
     for _, fn in ipairs(ns.queueListeners) do fn(reason) end
 end
 
--- kind: "add" | "remove" | "channel" | "unchannel"
+-- kind: "add" | "remove" | "channel" | "unchannel" | "order" (channel priority, see below)
 -- Returns ok, message. With `quiet`, no popup (the /7tv window shows its own Reload button).
 function ns.QueueRequest(kind, ref, alias, label, quiet)
     local state = ns.HelperState()
@@ -105,6 +105,126 @@ function ns.CancelRequest(id)
     end
     ns.sessionIds[id] = nil
     ns.NotifyQueueChanged()
+end
+
+-- "0.10.2" >= "0.7.0"?
+local function AtLeast(version, want)
+    local a, b = {}, {}
+    for n in tostring(version):gmatch("%d+") do a[#a + 1] = tonumber(n) end
+    for n in tostring(want):gmatch("%d+") do b[#b + 1] = tonumber(n) end
+    for i = 1, math.max(#a, #b) do
+        local x, y = a[i] or 0, b[i] or 0
+        if x ~= y then return x > y end
+    end
+    return true
+end
+
+-- Requests newer than the first helper release, with the helper version that understands them
+-- (an older helper answers "Unknown request").
+local NEEDS = { order = "0.7.0" }
+
+function ns.HelperSupports(kind)
+    local _, H = ns.HelperState()
+    return H ~= nil and AtLeast(H.version, NEEDS[kind] or "0")
+end
+
+-- Channel priority -------------------------------------------------------------
+-- When two channels have an emote with the same name, the one higher in the player's list wins.
+-- The helper keeps the list (SevenTVEmotes_Helper.channels, highest first); a reorder is sent as
+-- an "order" request whose ref is the logins, highest first, separated by commas.
+
+local function Split(s)
+    local out = {}
+    for login in tostring(s or ""):gmatch("[^,%s]+") do out[#out + 1] = login end
+    return out
+end
+
+-- The list as the player sees it: the helper's order with queued changes applied. New channels
+-- go on top, newest first (as the helper does); a queued reorder applies to the channels it
+-- names, and channels it doesn't name stay on top.
+-- Returns { { login = , queued = true if not added yet, removing = true if removal queued }, ... }
+function ns.ChannelList()
+    local _, H = ns.HelperState()
+    local order, adds, removing = nil, {}, {}
+    for _, r in ipairs(ns.db.queue) do
+        if r.kind == "order" then order = Split(r.ref) end
+        if r.kind == "channel" then adds[#adds + 1] = r.ref end
+        if r.kind == "unchannel" then removing[r.ref] = true end
+    end
+    local list, seen = {}, {}
+    local have = {}
+    if H and type(H.channels) == "table" then
+        for _, login in ipairs(H.channels) do have[login] = true end
+    end
+    for i = #adds, 1, -1 do
+        local login = adds[i]
+        if not have[login] and not seen[login] then
+            seen[login] = true
+            list[#list + 1] = { login = login, queued = true }
+        end
+    end
+    if H and type(H.channels) == "table" then
+        for _, login in ipairs(H.channels) do
+            if not seen[login] then
+                seen[login] = true
+                list[#list + 1] = { login = login, removing = removing[login] }
+            end
+        end
+    end
+    if order then
+        local byLogin, named, rest = {}, {}, {}
+        for _, row in ipairs(list) do byLogin[row.login] = row end
+        local inOrder = {}
+        for _, login in ipairs(order) do
+            if byLogin[login] and not inOrder[login] then
+                inOrder[login] = true
+                named[#named + 1] = byLogin[login]
+            end
+        end
+        for _, row in ipairs(list) do
+            if not inOrder[row.login] then rest[#rest + 1] = row end
+        end
+        list = rest
+        for _, row in ipairs(named) do list[#list + 1] = row end
+    end
+    return list
+end
+
+-- The queued reorder, if there is one.
+function ns.QueuedOrder()
+    for _, r in ipairs(ns.db.queue) do
+        if r.kind == "order" then return r end
+    end
+end
+
+-- Move a channel `delta` places (-1 = up = higher priority). Queues one "order" request that
+-- replaces any earlier one; moving back to the helper's own order cancels it.
+function ns.MoveChannel(login, delta)
+    local list = ns.ChannelList()
+    local i
+    for k, row in ipairs(list) do
+        if row.login == login then i = k end
+    end
+    local j = i and i + delta
+    if not j or j < 1 or j > #list then return false end
+    list[i], list[j] = list[j], list[i]
+    local logins = {}
+    for k, row in ipairs(list) do logins[k] = row.login end
+    local old = ns.QueuedOrder()
+    if old then
+        local q = ns.db.queue
+        for k = #q, 1, -1 do
+            if q[k].kind == "order" then table.remove(q, k) end
+        end
+        ns.sessionIds[old.id] = nil
+    end
+    local _, H = ns.HelperState()
+    local current = H and type(H.channels) == "table" and table.concat(H.channels, ",") or ""
+    if table.concat(logins, ",") == current then
+        ns.NotifyQueueChanged()
+        return true
+    end
+    return ns.QueueRequest("order", table.concat(logins, ","), nil, "New channel priority", true)
 end
 
 function ns.ReloadUI() Reload() end

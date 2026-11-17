@@ -145,6 +145,47 @@ check(ns.db.queue[#ns.db.queue].kind == "unchannel", "remove channel queues")
 ap.channel:SetText("somestreamer"); ap.chanBtn:Click()
 check(ap.feedback.text:find("already queued"), "duplicate rejected")
 
+-- channel priority --------------------------------------------------------------
+local savedQueue, savedChannels = ns.db.queue, SevenTVEmotes_Helper.channels
+ns.db.queue = {}
+SevenTVEmotes_Helper.channels = { "alpha", "beta", "gamma", "delta", "eps", "zeta" }
+UI:Refresh()
+local rows = ap.chanRows
+check(rows[1].rank.text == "1." and rows[1].text.text == "alpha" and rows[5].text.text == "eps", "listed in the helper's priority order")
+check(not rows[1].up.enabled and rows[1].down.enabled and rows[3].up.enabled, "top channel can only move down")
+check(ap.more.text:find("Showing 1%-5 of 6"), "more than five: scroll note: " .. ap.more.text)
+rows[2].up:Click() -- beta up
+local q = ns.db.queue
+check(#q == 1 and q[1].kind == "order" and q[1].ref == "beta,alpha,gamma,delta,eps,zeta", "a move queues an order request: " .. tostring(q[1] and q[1].ref))
+check(rows[1].text.text == "beta" and ap.more.text:find("New priority queued"), "list shows the queued order")
+rows[2].down:Click() -- alpha down
+q = ns.db.queue
+check(#q == 1 and q[1].ref == "beta,gamma,alpha,delta,eps,zeta", "a second move replaces the request")
+rows[3].up:Click(); rows[1].down:Click() -- back to alpha, beta, gamma
+check(#ns.db.queue == 0 and not ap.more.text:find("New priority"), "moving back to the helper's order cancels it")
+rows[1].scripts.OnMouseWheel(rows[1], -1)
+check(rows[1].text.text == "beta" and rows[1].rank.text == "2." and rows[5].text.text == "zeta", "mouse wheel scrolls")
+check(not rows[5].down.enabled, "bottom channel can't move down")
+rows[5].up:Click() -- zeta up: stays in view
+check(rows[4].text.text == "zeta" and ns.db.queue[1].ref == "alpha,beta,gamma,delta,zeta,eps", "moved channel stays in view")
+rows[1].scripts.OnMouseWheel(rows[1], 5)
+check(rows[1].text.text == "alpha", "scrolls back to the top")
+ns.QueueRequest("channel", "newbie", nil, "newbie's channel", true)
+UI:Refresh()
+check(rows[1].text.text == "newbie" and rows[1].status.text:find("queued") and rows[2].text.text == "alpha", "a queued channel goes on top")
+check(not rows[1].btn.shown and rows[1].down.enabled, "queued channel can be moved but not removed yet")
+SlashCmdList.SEVENTVEMOTES("channels")
+local said = table.concat(printed, "\n", #printed - 9)
+check(said:find("1. newbie", 1, true) and said:find("6. zeta", 1, true) and said:find("New priority queued", 1, true), "/7tv channels lists them")
+local version = SevenTVEmotes_Helper.version
+SevenTVEmotes_Helper.version = "0.6.1"
+UI:Refresh()
+check(not rows[2].up.enabled and rows[2].up.tip and rows[2].up.tip:find("Update"), "an older helper can't reorder")
+SevenTVEmotes_Helper.version = version
+check(ns.HelperSupports("order"), "0.7 helper can")
+ns.db.queue, SevenTVEmotes_Helper.channels = savedQueue, savedChannels
+UI:Refresh()
+
 -- Downloads tab -----------------------------------------------------------------
 UI.tabs.downloads:Click()
 local dp = UI.pages.downloads.ctl

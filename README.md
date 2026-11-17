@@ -60,7 +60,8 @@ in the minimap's addon menu (the addon compartment) on clients that have one.
 
 - **Emotes**: search and filter (All / Mine / Animated / Hidden), animated previews. Click an emote to
   see where it came from, copy its name, hide it from chat, or remove it.
-- **Add**: paste a 7tv.app link (or type a name), optionally rename it; add or remove Twitch channels.
+- **Add**: paste a 7tv.app link (or type a name), optionally rename it; add or remove Twitch channels,
+  and put them in priority order (if two channels have an emote with the same name, the higher one wins).
 - **Downloads**: helper status (running / not seen recently / not installed) and every request:
   *Not sent yet* → *In progress* → *Done* / *Failed*, plus *Retrying* when 7TV is unreachable and
   *Needs restart* when reserved slots ran out. Cancel anything still queued.
@@ -105,6 +106,7 @@ After that everything happens in game:
 | `/7tv add <7tv.app link>` | add one emote (`/7tv add <link> myName` to rename it) |
 | `/7tv add <name>` | add by name (most popular 7TV emote with that exact name) |
 | `/7tv channel <twitch name>` | add a streamer's 7TV emotes; `/7tv unchannel` removes them |
+| `/7tv channels` | your channels by priority (reorder them on the Add tab) |
 | `/7tv remove <name>` | remove an emote |
 | `/7tv queue`, `/7tv helper` | pending requests, helper status |
 | `/7tv search`, `/7tv config`, `/7tv size`, `/7tv disable` | as before |
