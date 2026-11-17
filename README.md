@@ -76,11 +76,15 @@ one; helper 0.5 moves the .blp files and rebuilds affected emotes.) Until WoW ha
 after the compressed placeholders were created, new emotes are built as TGA and converted later.
 The old files are blanked once the addon has reloaded onto the new ones.
 
-## For players (once the .exe is built)
+## For players
 
-Run `SevenTVEmotesHelper-Setup-<version>.exe`. It installs the helper for the current user (no admin
-rights) in `%LOCALAPPDATA%\Programs\SevenTVEmotesHelper`, sets it to start with Windows and starts it.
-On its first run the helper finds WoW: Forever, installs both addons and sits in the tray.
+Download `SevenTVEmotesHelper.exe` from the [latest release](../../releases/latest), put it somewhere
+permanent (e.g. a folder in Documents) and run it. On its first run it finds WoW: Forever, installs
+both addons and sits in the system tray. To have it start with Windows, right-click the tray icon
+and tick "Start with Windows". Restart WoW once after the first run. The exe isn't code-signed yet, so
+Windows SmartScreen may warn the first time: choose "More info", then "Run anyway".
+(A setup program that does all of this is in `helper-rs/installer`; it isn't released yet.)
+
 After that everything happens in game:
 
 | Command | |
