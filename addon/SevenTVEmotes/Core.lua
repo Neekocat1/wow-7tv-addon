@@ -264,14 +264,21 @@ local function OnHyperlinkEnter(cf, link)
     GameTooltip:AddLine("Shift-click while typing to add it to your message", 0.6, 0.6, 0.6)
     GameTooltip:Show()
     ns.tooltipEmote = e
+    -- Rewriting a chat line's text (which the Animator does to animate emotes) makes the client
+    -- fire OnHyperlinkLeave, hiding this tooltip a frame later. So the Animator leaves this chat
+    -- frame alone while the tooltip is up; the tooltip's own copy of the emote keeps animating.
+    ns.hoverFrame = cf
 end
 
 local function OnHyperlinkLeave()
+    ns.hoverFrame = nil
     if ns.tooltipEmote then
         ns.tooltipEmote = nil
         GameTooltip:Hide()
     end
 end
+
+ns.OnHyperlinkEnter, ns.OnHyperlinkLeave = OnHyperlinkEnter, OnHyperlinkLeave -- (for tests)
 
 local function GetActiveEditBox()
     if ChatEdit_GetActiveWindow then return ChatEdit_GetActiveWindow() end

@@ -465,6 +465,7 @@ impl Service {
         let refreshed = lib.refresh_sources(crate::library::REFRESH_EVERY, force);
         let stuck = !lib.state.waiting.is_empty() || lib.state.converting > 0;
         let rebuild = lib.state.images.values().any(|i| i.rebuild);
+        let upgrade = lib.upgrades_pending(gs);
         if fmt_changed {
             self.set_status("Converting emotes...", true);
         }
@@ -473,6 +474,7 @@ impl Service {
             || force
             || fmt_changed
             || rebuild
+            || upgrade
             || (heartbeat && stuck)
         {
             let build = {
@@ -646,6 +648,8 @@ fn ready_message(build: &BuildResult, results: &[Processed]) -> Option<Ready> {
         )
     } else if !build.converted.is_empty() {
         "Emotes converted".into()
+    } else if !build.upgraded.is_empty() {
+        "Smoother emote animations ready".into()
     } else if results.iter().any(|r| r.ok) {
         "Your changes are ready".into()
     } else if !results.is_empty() {

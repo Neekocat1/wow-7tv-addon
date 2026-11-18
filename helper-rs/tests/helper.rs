@@ -945,6 +945,43 @@ fn migration_moves_compressed_out_of_slots() {
 }
 
 #[test]
+fn old_animations_are_rebuilt_into_new_slots() {
+    let f = fake();
+    let mut svc = make_service(&f);
+    svc.run_once(); // global emotes, catJAM animated
+    // as if made by a helper before 0.7.1 (no anim version)
+    let old_slot = {
+        let lib = lib(&mut svc);
+        let info = lib.state.images.get_mut(ANIM).unwrap();
+        assert!(info.frames > 1 && info.anim == Some(images::ANIM_VERSION));
+        info.anim = None;
+        info.slot.clone()
+    };
+    assert!(lib(&mut svc).upgrades_pending(None));
+    svc.run_once();
+    let info = {
+        let l = lib(&mut svc);
+        let info = l.state.images[ANIM].clone();
+        assert_ne!(info.slot, old_slot, "rebuilt into another slot");
+        assert_eq!(info.anim, Some(images::ANIM_VERSION));
+        assert_eq!(l.state.slots[&info.slot].id.as_deref(), Some(ANIM));
+        assert!(l.state.slots[&old_slot].id.is_none() && l.state.slots[&old_slot].freed.is_some());
+        let old_file = l.slot_file(&old_slot, &info.fmt);
+        assert!(
+            std::fs::metadata(&old_file).unwrap().len() < 1000,
+            "old slot blanked"
+        );
+        assert!(l.ready.as_ref().is_some_and(|r| r.msg.contains("Smoother")));
+        assert!(!l.upgrades_pending(None), "nothing left to do");
+        info
+    };
+    assert!(local_lua(&f).contains(&format!("{}.tga", info.slot)));
+    // a pass with nothing to upgrade leaves it alone
+    svc.run_once();
+    assert_eq!(lib(&mut svc).state.images[ANIM].slot, info.slot);
+}
+
+#[test]
 fn new_emotes_fall_back_to_tga_until_blp_visible() {
     let f = fake();
     let mut svc = make_service(&f);
@@ -1063,12 +1100,43 @@ fn animated_gif_renders_a_sprite_sheet() {
         &images::RenderOptions::default(),
     )
     .unwrap();
-    assert_eq!(layout.frames, 5);
     assert_eq!((layout.w, layout.h), (96, 48));
-    // delays 10, 30, 50, 70, 90 ms: under 20 ms counts as 100 -> (100+30+50+70+90)/5 = 68
-    assert_eq!(layout.ms, 68);
-    let im = image::open(&out).unwrap();
+    // delays 10, 30, 50, 70, 90 ms (under 20 ms counts as 100): 340 ms resampled to even 34 ms
+    // frames (30 fps at most), so the 100 ms first frame shows three times
+    assert_eq!((layout.frames, layout.ms), (10, 34));
+    let im = image::open(&out).unwrap().to_rgba8();
     assert_eq!((im.width(), im.height()), (layout.tw, layout.th));
+    let frame = |i: u32| {
+        let (x, y) = ((i % layout.cols) * layout.w, (i / layout.cols) * layout.h);
+        image::imageops::crop_imm(&im, x, y, layout.w, layout.h).to_image()
+    };
+    assert!(
+        frame(0) == frame(1) && frame(1) == frame(2),
+        "first frame held for 3"
+    );
+    assert!(frame(2) != frame(3), "then the second frame");
+}
+
+#[test]
+fn long_animations_keep_their_speed() {
+    // 120 frames at 25 fps (40 ms each): kept whole (the old 48-frame limit made it 10 fps)
+    let mut frames = Vec::new();
+    for i in 0..120u32 {
+        let img = image::RgbaImage::from_pixel(32, 32, image::Rgba([(i * 2) as u8, 0, 0, 255]));
+        frames.push(image::Frame::from_parts(
+            img,
+            0,
+            0,
+            image::Delay::from_numer_denom_ms(40, 1),
+        ));
+    }
+    let mut gif = Vec::new();
+    {
+        let mut enc = image::codecs::gif::GifEncoder::new(&mut gif);
+        enc.encode_frames(frames).unwrap();
+    }
+    let (layout, _) = images::render_bytes(&gif, true, &images::RenderOptions::default()).unwrap();
+    assert_eq!((layout.frames, layout.ms), (120, 40));
 }
 
 #[test]

@@ -180,25 +180,24 @@ pub fn fit(w: u32, h: u32, size: u32, max_ratio: f64) -> (u32, u32) {
     (ww, hh)
 }
 
-pub fn decimate<T: Clone>(
-    frames: &[T],
-    durations: &[u32],
-    max_frames: usize,
-) -> (Vec<T>, Vec<u32>) {
-    let n = frames.len();
-    if n <= max_frames {
-        return (frames.to_vec(), durations.to_vec());
+/// Resample an animation onto evenly spaced frames, since the addon shows every frame for the same
+/// time. `step` is the wanted time per frame in ms; the result's frames each last `total / n` ms
+/// (the returned value), so the animation keeps its length and its pauses.
+pub fn retime<T: Clone>(frames: &[T], durations: &[u32], step: f64) -> (Vec<T>, f64) {
+    let total: f64 = durations.iter().map(|&d| d as f64).sum::<f64>().max(1.0);
+    let n = ((total / step.max(1.0)).round() as usize).max(1);
+    let each = total / n as f64;
+    let mut out = Vec::with_capacity(n);
+    let (mut idx, mut end) = (0, durations[0] as f64);
+    for i in 0..n {
+        let t = (i as f64 + 1e-6) * each; // the start of output frame i (past rounding errors)
+        while t >= end && idx + 1 < frames.len() {
+            idx += 1;
+            end += durations[idx] as f64;
+        }
+        out.push(frames[idx].clone());
     }
-    let step = n as f64 / max_frames as f64;
-    let mut out_f = Vec::with_capacity(max_frames);
-    let mut out_d = Vec::with_capacity(max_frames);
-    for i in 0..max_frames {
-        let a = (i as f64 * step) as usize;
-        let b = ((i + 1) as f64 * step) as usize;
-        out_f.push(frames[a].clone());
-        out_d.push(durations[a..b.max(a + 1).min(n)].iter().sum());
-    }
-    (out_f, out_d)
+    (out, each)
 }
 
 /// Columns and power-of-two sheet size with the smallest area (then the squarest).
@@ -685,10 +684,19 @@ pub struct RenderOptions {
     pub size: u32,
     pub anim_size: u32,
     pub max_ratio: f64,
+    /// Frames per sprite sheet at most (fewer if they don't fit in `max_sheet`).
     pub max_frames: usize,
+    /// Faster animations are resampled down to this (the addon redraws chat 30 times a second).
+    pub max_fps: f64,
     pub max_sheet: u32,
     pub animate: bool,
 }
+
+/// Bumped when animated emotes come out differently enough to be worth rebuilding (the helper
+/// re-renders textures made by an older version; see `ImageInfo::anim`).
+/// 2: resampled to keep the original speed (up to 30 fps) and timing; before, at most 48 frames
+/// with the average frame time.
+pub const ANIM_VERSION: u32 = 2;
 
 impl Default for RenderOptions {
     fn default() -> Self {
@@ -696,7 +704,8 @@ impl Default for RenderOptions {
             size: 64,
             anim_size: 48,
             max_ratio: 4.0,
-            max_frames: 48,
+            max_frames: 240,
+            max_fps: 30.0,
             max_sheet: 1024,
             animate: true,
         }
@@ -752,31 +761,41 @@ pub fn render_image(data: &[u8], opt: &RenderOptions) -> Result<(RgbaImage, Layo
         ));
     }
 
-    let (mut frames, mut durations) = decimate(&frames, &durations, opt.max_frames);
-    let mut layout = sheet_layout(frames.len() as u32, w, h, opt.max_sheet);
+    // Evenly spaced frames: as often as the shortest frame (so nothing is skipped), but no faster
+    // than max_fps, and no more than fit on a sheet.
+    let total: f64 = durations.iter().map(|&d| d as f64).sum();
+    let shortest = durations.iter().copied().min().unwrap_or(100) as f64;
+    let mut step = shortest.max(1000.0 / opt.max_fps);
+    if total / step > opt.max_frames as f64 {
+        step = total / opt.max_frames as f64;
+    }
+    // which source frame each sheet frame shows
+    let sources: Vec<usize> = (0..frames.len()).collect();
+    let (mut pick, mut each) = retime(&sources, &durations, step);
+    let mut layout = sheet_layout(pick.len() as u32, w, h, opt.max_sheet);
     while layout.is_none() {
-        // too many frames for the sheet: halve until it fits
-        let n = (frames.len() / 2).max(1);
-        (frames, durations) = decimate(&frames, &durations, n);
-        layout = sheet_layout(frames.len() as u32, w, h, opt.max_sheet);
-        if layout.is_none() && frames.len() == 1 {
+        // too many frames for the sheet: drop a tenth at a time until it fits
+        if pick.len() == 1 {
             return Err("emote too large for a texture".into());
         }
+        step = total / (pick.len() * 9 / 10).max(1) as f64;
+        (pick, each) = retime(&sources, &durations, step);
+        layout = sheet_layout(pick.len() as u32, w, h, opt.max_sheet);
     }
     let (cols, tw, th) = layout.unwrap();
     let mut canvas = RgbaImage::new(tw, th);
-    for (i, fr) in frames.iter().enumerate() {
+    let mut resized: Vec<Option<RgbaImage>> = vec![None; frames.len()];
+    for (i, &src) in pick.iter().enumerate() {
         let i = i as u32;
-        let small = resize_lanczos(fr, w, h);
+        let small = resized[src].get_or_insert_with(|| resize_lanczos(&frames[src], w, h));
         image::imageops::replace(
             &mut canvas,
-            &small,
+            small,
             ((i % cols) * w) as i64,
             ((i / cols) * h) as i64,
         );
     }
-    let total: u32 = durations.iter().sum();
-    let ms = py_round(total as f64 / frames.len() as f64).max(10) as u32;
+    let ms = py_round(each).max(10) as u32;
     Ok((
         canvas,
         Layout {
@@ -784,7 +803,7 @@ pub fn render_image(data: &[u8], opt: &RenderOptions) -> Result<(RgbaImage, Layo
             h,
             tw,
             th,
-            frames: frames.len() as u32,
+            frames: pick.len() as u32,
             cols,
             ms,
         },
@@ -823,9 +842,19 @@ mod tests {
         // values checked against the Python helper
         let (cols, sw, sh) = sheet_layout(30, 48, 48, 1024).unwrap();
         assert_eq!((cols, sw, sh), (3, 256, 512));
-        let (f, d) = decimate(&(0..100).collect::<Vec<_>>(), &[10; 100], 48);
-        assert_eq!(f.len(), 48);
-        assert_eq!(d.iter().sum::<u32>(), 1000);
+    }
+
+    #[test]
+    fn retime_keeps_speed_and_pauses() {
+        // even frames at the step: unchanged
+        let (f, each) = retime(&[0, 1, 2, 3], &[50; 4], 50.0);
+        assert_eq!((f, each), (vec![0, 1, 2, 3], 50.0));
+        // 50 fps resampled to 25 fps: every other frame, same length
+        let (f, each) = retime(&(0..10).collect::<Vec<_>>(), &[20; 10], 40.0);
+        assert_eq!((f, each), (vec![0, 2, 4, 6, 8], 40.0));
+        // a 300 ms hold on frame 1 stays a 300 ms hold
+        let (f, each) = retime(&[0, 1, 2], &[100, 300, 100], 100.0);
+        assert_eq!((f, each), (vec![0, 1, 1, 1, 2], 100.0));
     }
 
     #[test]

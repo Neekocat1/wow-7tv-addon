@@ -101,6 +101,10 @@ pub struct ImageInfo {
     pub mips: Option<bool>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub rebuild: bool,
+    /// For animated emotes: the `images::ANIM_VERSION` they were made with (none: before 0.7.1).
+    /// Older ones are rebuilt into a new slot (see `reconcile`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub anim: Option<u32>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
@@ -251,6 +255,8 @@ pub struct BuildResult {
     pub waiting: HashSet<String>,
     pub failed: HashSet<String>,
     pub converted: HashSet<String>,
+    /// animated emotes rebuilt with smoother animation (see `ImageInfo::anim`)
+    pub upgraded: HashSet<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -264,6 +270,10 @@ enum WorkKind {
     New,
     Rebuild,
     Convert,
+    /// an animated emote made by an older converter, rebuilt into a new slot: the game keeps
+    /// showing a texture file it has loaded until it restarts, so rewriting the file in place
+    /// would pair the new layout with the old picture
+    Upgrade,
 }
 
 pub type Progress<'a> = &'a mut dyn FnMut(&mut Library, usize, usize);
@@ -535,6 +545,18 @@ impl Library {
         }
     }
 
+    /// Animated emotes made by an older converter that could be rebuilt now (there's a free
+    /// slot the running game can see). See `WorkKind::Upgrade`.
+    pub fn upgrades_pending(&self, game_start: Option<f64>) -> bool {
+        let fmt = &self.state.format;
+        self.state.images.values().any(|i| {
+            i.frames > 1
+                && i.anim.unwrap_or(1) < images::ANIM_VERSION
+                && !i.rebuild
+                && i.fmt == *fmt
+        }) && !self.free_slots(game_start, None).is_empty()
+    }
+
     pub fn free_slots(&self, game_start: Option<f64>, fmt: Option<&str>) -> Vec<String> {
         let fmt = fmt.unwrap_or(&self.state.format);
         let mut v: Vec<String> = self
@@ -791,6 +813,18 @@ impl Library {
                 }
             }
         }
+        // Animated emotes from an older converter, while there are free slots to spare.
+        for (eid, info) in &self.state.images {
+            let stale = info.frames > 1 && info.anim.unwrap_or(1) < images::ANIM_VERSION;
+            if !stale || info.rebuild || info.fmt != fmt {
+                continue; // (rebuilds and format conversions re-render anyway)
+            }
+            let Some(em) = need_ids.get(eid) else {
+                continue;
+            };
+            let Some(slot) = free.pop() else { break };
+            work.push((WorkKind::Upgrade, em.clone(), slot, fmt.clone()));
+        }
         let mut old_files: Vec<PathBuf> = Vec::new();
         let mut pending_conv: u64 = 0;
         for (eid, info) in &self.state.images {
@@ -880,11 +914,35 @@ impl Library {
                                 }
                                 WorkKind::Convert => pending_conv += 1,
                                 WorkKind::Rebuild => {}
+                                WorkKind::Upgrade => {
+                                    // keep the old texture, and don't try again every pass
+                                    if let Some(info) = self.state.images.get_mut(&em.id) {
+                                        info.anim = Some(images::ANIM_VERSION);
+                                    }
+                                }
                             }
                         }
                         Ok(layout) => {
                             let prev = self.state.images.get(&em.id).map(|i| i.fmt.clone());
-                            if *kind == WorkKind::New {
+                            if *kind == WorkKind::Upgrade {
+                                // move to the new slot; blank the old one (the game reads the
+                                // new Local.lua, which points at the new slot, on /reload)
+                                if let Some(old) = self.state.images.get(&em.id).cloned() {
+                                    if let Some(o) = self.state.slots.get_mut(&old.slot) {
+                                        o.id = None;
+                                        o.freed = Some(now());
+                                    }
+                                    let f = self.slot_file(&old.slot, &old.fmt);
+                                    if f.exists() {
+                                        let _ = images::write_blank(&f);
+                                    }
+                                }
+                                if let Some(s) = self.state.slots.get_mut(slot) {
+                                    s.id = Some(em.id.clone());
+                                    s.freed = None;
+                                }
+                                result.upgraded.insert(em.id.clone());
+                            } else if *kind == WorkKind::New {
                                 if let Some(s) = self.state.slots.get_mut(slot) {
                                     s.id = Some(em.id.clone());
                                     s.freed = None;
@@ -910,6 +968,7 @@ impl Library {
                                 fmt: f.clone(),
                                 mips: Some(f == "blp"),
                                 rebuild: false,
+                                anim: (layout.frames > 1).then_some(images::ANIM_VERSION),
                                 extra: Map::new(),
                             };
                             self.state.images.insert(em.id.clone(), info);
@@ -938,10 +997,11 @@ impl Library {
         self.top_up_slots();
         if !work.is_empty() {
             log::info!(
-                "{}: {} new textures, {} converted, {} waiting for a restart, {} failed",
+                "{}: {} new textures, {} converted, {} smoother animations, {} waiting for a restart, {} failed",
                 self.name(),
                 result.added.len(),
                 result.converted.len(),
+                result.upgraded.len(),
                 result.waiting.len(),
                 result.failed.len()
             );

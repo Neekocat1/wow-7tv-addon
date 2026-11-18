@@ -3,7 +3,8 @@
 local LOCAL = arg[1] or "/tmp/Local.lua"
 local NOW = 1794703534 + 120
 function time() return NOW end
-function GetTime() return 1.0 end
+local clock = 1.0
+function GetTime() return clock end
 function GetCursorPosition() return 0, 0 end
 function wipe(t) for k in pairs(t) do t[k] = nil end return t end
 function strsplit(sep, s) local out = {} for p in (s..sep):gmatch("(.-)"..sep:gsub("%p","%%%0")) do out[#out+1]=p end return table.unpack(out) end
@@ -78,6 +79,8 @@ local cursorX, cursorY = 0, 0
 function GetCursorPosition() return cursorX, cursorY end
 local tipLines = {}
 GameTooltip.AddLine = function(_, t) tipLines[#tipLines + 1] = t end
+function GameTooltip:SetOwner(o) self.owner = o end
+function GameTooltip:GetOwner() return self.owner end
 
 local ns = {}
 for _, f in ipairs({ "Emotes.lua", "Core.lua", "Animator.lua", "Autocomplete.lua", "Helper.lua", "UI.lua", "LiveStatus.lua", "Minimap.lua", "Commands.lua" }) do
@@ -144,6 +147,45 @@ ap.chanRows[2].btn:Click()
 check(ns.db.queue[#ns.db.queue].kind == "unchannel", "remove channel queues")
 ap.channel:SetText("somestreamer"); ap.chanBtn:Click()
 check(ap.feedback.text:find("already queued"), "duplicate rejected")
+
+-- hovering an emote in chat ---------------------------------------------------------
+-- The Animator rewrites chat lines to animate emotes; doing that to the line under the mouse makes
+-- the client drop the hover (OnHyperlinkLeave), so the hovered chat frame is left alone.
+do
+    local cf = CreateFrame("ScrollingMessageFrame", "ChatFrame1", UIParent)
+    local line = CreateFrame("FontString", nil, cf)
+    cf.visibleLines = { line }
+    ns.RefreshChatFrames()
+    local links = ns.db.links
+    ns.db.links = true
+    local e = ns.emotes.catJAM
+    line:SetText("look " .. ns.Emotify("catJAM"))
+    local tick = ns.animDriver.scripts.OnUpdate
+    local function advance()
+        clock = clock + e.ms / 1000
+        tick(ns.animDriver, 1)
+    end
+    advance()
+    local before = line.text
+    advance()
+    check(line.text ~= before, "chat emotes animate")
+    ns.OnHyperlinkEnter(cf, "addon:SevenTVEmotes:" .. e.id)
+    check(GameTooltip.owner == cf and ns.tooltipEmote == e, "hover shows the emote tooltip")
+    before = line.text
+    advance(); advance()
+    check(line.text == before, "the hovered chat frame isn't rewritten")
+    ns.OnHyperlinkLeave(cf)
+    advance()
+    check(line.text ~= before and not ns.hoverFrame, "animates again after the hover")
+    -- a tooltip that went away without a leave event doesn't freeze the chat frame
+    ns.OnHyperlinkEnter(cf, "addon:SevenTVEmotes:" .. e.id)
+    GameTooltip.owner = UIParent
+    before = line.text
+    advance()
+    check(line.text ~= before and not ns.hoverFrame, "a stale hover is dropped")
+    ns.OnHyperlinkLeave(cf)
+    ns.db.links = links
+end
 
 -- channel priority --------------------------------------------------------------
 local savedQueue, savedChannels = ns.db.queue, SevenTVEmotes_Helper.channels

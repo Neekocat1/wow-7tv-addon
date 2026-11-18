@@ -50,6 +50,7 @@ local function AnimateChatFrame(cf)
 end
 
 local driver = CreateFrame("Frame")
+ns.animDriver = driver -- (for tests)
 local elapsedSince = 0
 driver:SetScript("OnUpdate", function(_, elapsed)
     local db = ns.db
@@ -59,9 +60,15 @@ driver:SetScript("OnUpdate", function(_, elapsed)
     elapsedSince = 0
     now = GetTime() * 1000
 
+    -- Leave the chat frame whose emote tooltip is showing alone (see OnHyperlinkEnter in Core).
+    local hover = ns.hoverFrame
+    if hover and not (GameTooltip:IsVisible() and GameTooltip:GetOwner() == hover) then
+        hover, ns.hoverFrame = nil, nil -- the tooltip went away without a leave event
+    end
+
     local frames = ns.chatFrames
     for i = 1, #frames do
-        pcall(AnimateChatFrame, frames[i])
+        if frames[i] ~= hover then pcall(AnimateChatFrame, frames[i]) end
     end
 
     if ns.tooltipEmote and GameTooltip:IsVisible() and GameTooltipTextLeft1 then
