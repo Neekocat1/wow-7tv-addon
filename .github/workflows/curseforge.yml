@@ -80,15 +80,29 @@ jobs:
       - uses: BigWigsMods/packager@v2
         with:
           # -d: package without uploading (dry runs)
+          # -r: the zip goes in a normal folder (upload-artifact skips hidden ones like .release)
           args: >-
-            -t ${{ runner.temp }}/SevenTVEmotes
+            -t ${{ runner.temp }}/SevenTVEmotes -r ${{ runner.temp }}/out
             ${{ (github.event_name == 'release' || inputs.tag != '') && ' ' || '-d' }}
             ${{ vars.CURSEFORGE_PROJECT_ID && format('-p {0}', vars.CURSEFORGE_PROJECT_ID) || '' }}
           pandoc: 'false'
         env:
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
 
+      # What went into the zip, on the run's summary page
+      - name: Summary
+        run: |
+          zip=$(ls "$RUNNER_TEMP"/out/*.zip)
+          {
+            echo "### $(basename "$zip")"
+            if [ "$UPLOAD" = true ]; then echo "Uploaded to CurseForge."; else echo "Dry run: not uploaded."; fi
+            echo '```'
+            unzip -l "$zip"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - uses: actions/upload-artifact@v7
         with:
           name: SevenTVEmotes-addon
-          path: ${{ runner.temp }}/SevenTVEmotes/.release/*.zip
+          path: ${{ runner.temp }}/out/*.zip
+          if-no-files-found: error
