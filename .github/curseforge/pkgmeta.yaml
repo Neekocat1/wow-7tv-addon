@@ -1,0 +1,8 @@
+# BigWigs packager settings for .github/workflows/curseforge.yml. The workflow copies this into
+# the addon folder as .pkgmeta at build time (kept here so it isn't bundled into the helper exe).
+package-as: SevenTVEmotes
+
+# The changelog on CurseForge: the GitHub release's notes, written by the workflow.
+manual-changelog:
+  filename: CHANGELOG.md
+  markup-type: markdown

@@ -15,7 +15,7 @@ helper-rs/                the background app (Rust), and the emote code the web 
 web/                      the emote pack builder web page (WebAssembly + JS): see web/README.md
 docs/                     CurseForge description
 tests/                    addon tests (Lua); the helper's and the web page's tests are in helper-rs/tests and web/test
-.github/workflows/        publishes web/ on GitHub Pages
+.github/workflows/        publishes web/ on GitHub Pages; uploads the addon to CurseForge on each release
 ```
 
 ## How it fits together
@@ -115,9 +115,13 @@ Autocomplete: type `:` plus two characters; Tab cycles, another `:` accepts.
 
 ## Development (Windows)
 
-**CurseForge:** run `addon\package-curseforge.bat`, then upload `dist\SevenTVEmotes-<version>.zip` as a
-Forever file. It contains only `SevenTVEmotes`; `SevenTVEmotes_Local` must never be in it, or CurseForge
-updates would wipe players' emotes. The description is in `docs/curseforge-description.md`.
+**CurseForge:** publishing a GitHub release uploads the addon to CurseForge automatically
+(`.github/workflows/curseforge.yml`; setup steps at the top of that file). The file is named after the
+release's tag and gets the release notes as its changelog. Running that workflow by hand builds the zip
+without uploading it. To upload by hand instead, run `addon\package-curseforge.bat` and upload
+`dist\SevenTVEmotes-<version>.zip` as a Forever file. Either way the zip contains only `SevenTVEmotes`;
+`SevenTVEmotes_Local` must never be in it, or CurseForge updates would wipe players' emotes. The
+description is in `docs/curseforge-description.md`.
 
 **Pack builder:** `web/build.bat` (or `web/build.sh`) builds its WebAssembly module from the helper's
 Rust code. Pushing to `main` publishes it on GitHub Pages through `.github/workflows/pages.yml`

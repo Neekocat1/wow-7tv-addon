@@ -1,0 +1,94 @@
+# Uploads the SevenTVEmotes addon to CurseForge when a GitHub release is published, with the
+# BigWigs packager (https://github.com/BigWigsMods/packager). The CurseForge file is named after
+# the release's tag and gets the release notes as its changelog. Only addon/SevenTVEmotes is
+# uploaded (SevenTVEmotes_Local belongs to the helper and emote packs).
+#
+# One-time setup, in the repo's Settings > Secrets and variables > Actions:
+#   Secrets tab:   CF_API_TOKEN           a CurseForge API token
+#   Variables tab: CURSEFORGE_PROJECT_ID  the Project ID from the CurseForge page's About Project box
+#
+# By hand: Actions > CurseForge > Run workflow. Leave the tag empty for a dry run (builds the zip
+# without uploading it; download it from the run's Artifacts to check it), or enter a release's tag
+# to upload that release (for releases published before this workflow existed).
+name: CurseForge
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to upload, like v0.7.0 (empty: dry run, nothing uploaded)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+      PROJECT_ID: ${{ vars.CURSEFORGE_PROJECT_ID }}
+      UPLOAD: ${{ github.event_name == 'release' || inputs.tag != '' }}
+    steps:
+      # this workflow's own files (the packager settings)
+      - uses: actions/checkout@v6
+      # the addon as it is in the release
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.release.tag_name || inputs.tag || github.ref }}
+          path: release
+
+      - name: Get the release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NOTES: ${{ github.event.release.body }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = release ]; then
+            printf '%s\n' "$EVENT_NOTES"
+          elif [ -n "$TAG" ]; then
+            gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body
+          else
+            echo "Test build, not uploaded."
+          fi > "$RUNNER_TEMP/notes.md"
+
+      - name: Check the setup
+        if: env.UPLOAD == 'true'
+        env:
+          HAVE_TOKEN: ${{ secrets.CF_API_TOKEN != '' }}
+        run: |
+          [ -n "$PROJECT_ID" ] || { echo "::error::Add the CURSEFORGE_PROJECT_ID repository variable (see the top of this file)."; exit 1; }
+          [ "$HAVE_TOKEN" = true ] || { echo "::error::Add the CF_API_TOKEN repository secret (see the top of this file)."; exit 1; }
+
+      # The packager wants the addon at the top of a git checkout, so copy the addon folder into
+      # a scratch repo tagged like the release (the tag becomes the CurseForge file's version).
+      - name: Stage the addon
+        run: |
+          stage="$RUNNER_TEMP/SevenTVEmotes"
+          cp -r release/addon/SevenTVEmotes "$stage"
+          cp .github/curseforge/pkgmeta.yaml "$stage/.pkgmeta"
+          cp "$RUNNER_TEMP/notes.md" "$stage/CHANGELOG.md"
+          cd "$stage"
+          git init -q
+          git add -A
+          git -c user.name=github-actions -c user.email=github-actions@users.noreply.github.com \
+            commit -q -m "${TAG:-dry run}"
+          if [ -n "$TAG" ]; then git tag "$TAG"; fi
+
+      - uses: BigWigsMods/packager@v2
+        with:
+          # -d: package without uploading (dry runs)
+          args: >-
+            -t ${{ runner.temp }}/SevenTVEmotes
+            ${{ (github.event_name == 'release' || inputs.tag != '') && ' ' || '-d' }}
+            ${{ vars.CURSEFORGE_PROJECT_ID && format('-p {0}', vars.CURSEFORGE_PROJECT_ID) || '' }}
+          pandoc: 'false'
+        env:
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: SevenTVEmotes-addon
+          path: ${{ runner.temp }}/SevenTVEmotes/.release/*.zip
