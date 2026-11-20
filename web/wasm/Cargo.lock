@@ -295,7 +295,7 @@ dependencies = [
 
 [[package]]
 name = "seventv-helper"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "image",
  "indexmap",
@@ -308,7 +308,7 @@ dependencies = [
 
 [[package]]
 name = "seventv-pack-wasm"
-version = "0.7.1"
+version = "0.7.2"
 dependencies = [
  "indexmap",
  "serde_json",

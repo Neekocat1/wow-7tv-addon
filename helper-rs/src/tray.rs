@@ -1,7 +1,8 @@
 //! System tray icon (native Win32: Shell_NotifyIcon), replacing pystray.
 //!
 //! Menu: status line, "Check 7TV for new emotes now", "Open emote folder", "Open log",
-//! "Start with Windows" (checked when on), "Quit". Balloon notifications when requests finish.
+//! "Start with Windows" (checked when on), "Check for a helper update now", "Update automatically"
+//! (checked when on), "Quit". Balloon notifications when requests finish.
 //! The service runs on a background thread; the tray owns the main thread's message loop.
 
 use crate::installer;
@@ -37,6 +38,8 @@ const ID_FOLDER: usize = 2;
 const ID_LOG: usize = 3;
 const ID_AUTOSTART: usize = 4;
 const ID_QUIT: usize = 5;
+const ID_CHECK_UPDATE: usize = 6;
+const ID_AUTO_UPDATE: usize = 7;
 
 static HWND_VALUE: AtomicIsize = AtomicIsize::new(0);
 static ICON_VALUE: AtomicIsize = AtomicIsize::new(0);
@@ -164,7 +167,7 @@ fn show_menu(hwnd: HWND) {
         let status = wide(&shared.status());
         AppendMenuW(menu, MF_STRING | MF_GRAYED, 0, status.as_ptr());
         AppendMenuW(menu, MF_SEPARATOR, 0, std::ptr::null());
-        let items = [
+        let mut items = vec![
             (ID_REFRESH, "Check 7TV for new emotes now", false),
             (ID_FOLDER, "Open emote folder", false),
             (ID_LOG, "Open log", false),
@@ -174,6 +177,14 @@ fn show_menu(hwnd: HWND) {
                 installer::autostart_enabled(),
             ),
         ];
+        if shared.self_update.load(Ordering::SeqCst) {
+            items.push((ID_CHECK_UPDATE, "Check for a helper update now", false));
+            items.push((
+                ID_AUTO_UPDATE,
+                "Update automatically",
+                shared.auto_update.load(Ordering::SeqCst),
+            ));
+        }
         let labels: Vec<Vec<u16>> = items.iter().map(|(_, l, _)| wide(l)).collect();
         for ((id, _, checked), label) in items.iter().zip(&labels) {
             AppendMenuW(
@@ -214,6 +225,11 @@ fn show_menu(hwnd: HWND) {
             if let Err(e) = installer::set_autostart(!installer::autostart_enabled()) {
                 log::warn!("couldn't change autostart: {e}");
             }
+        }
+        ID_CHECK_UPDATE => shared.request_update_check(),
+        ID_AUTO_UPDATE => {
+            shared.auto_update.fetch_xor(true, Ordering::SeqCst);
+            shared.request_refresh(); // wakes the service, which saves the setting
         }
         ID_QUIT => {
             shared.stop();

@@ -61,7 +61,7 @@ pub fn home() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     /// extra World of Warcraft folders to look in
     #[serde(default)]
@@ -71,8 +71,31 @@ pub struct Config {
     pub flavors: Vec<String>,
     #[serde(default)]
     pub first_run_done: bool,
+    /// Install new helper releases from GitHub by itself (tray: "Update automatically").
+    #[serde(default = "yes")]
+    pub auto_update: bool,
+    /// A release that failed to start: not installed again automatically.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub skip_update: Option<String>,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            wow_dirs: Vec::new(),
+            flavors: Vec::new(),
+            first_run_done: false,
+            auto_update: true,
+            skip_update: None,
+            extra: Map::new(),
+        }
+    }
 }
 
 impl Config {

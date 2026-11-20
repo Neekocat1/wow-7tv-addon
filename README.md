@@ -97,6 +97,8 @@ permanent (e.g. a folder in Documents) and run it. On its first run it finds WoW
 both addons and sits in the system tray. To have it start with Windows, right-click the tray icon
 and tick "Start with Windows". Restart WoW once after the first run. The exe isn't code-signed yet, so
 Windows SmartScreen may warn the first time: choose "More info", then "Run anyway".
+From 0.7.2 on, the helper updates itself from the latest GitHub release (once WoW is closed); the tray
+menu has "Check for a helper update now" and "Update automatically".
 (A setup program that does all of this is in `helper-rs/installer`; it isn't released yet.)
 
 After that everything happens in game:
@@ -143,7 +145,12 @@ use `--autostart on|off` to test it.
 The original Python helper (0.5.1) was removed after the Rust port; it's in the git history
 (first commit) if you ever need to compare against it.
 
-**Updating:** run the new installer. It asks the running helper to quit (via `quit.request` in the
+**Updating:** from 0.7.2 the helper updates itself: twice a day it asks the GitHub API for the
+latest release, and if that has a newer `SevenTVEmotesHelper.exe` (the asset name matters) it
+downloads it, checks it against the size and SHA-256 GitHub lists, swaps it in for its own exe and
+starts it (`helper-rs/src/updater.rs`). It waits while WoW is open, and rolls back and skips a
+version that doesn't start. So releasing is just publishing a GitHub release with the exe attached.
+The installer does the same by hand: it asks the running helper to quit (via `quit.request` in the
 app folder), replaces the exe and starts the new one. Starting a newer exe by hand does the same
 hand-over (the old one quits, the new one takes over); an older helper never replaces a newer one.
 The Rust helper (0.6) takes over from the Python helper (0.5.x) this way, and the installer removes the

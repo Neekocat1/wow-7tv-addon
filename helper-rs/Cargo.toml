@@ -1,6 +1,6 @@
 [package]
 name = "seventv-helper"
-version = "0.7.1"
+version = "0.7.2"
 edition = "2024"
 description = "7TV Emotes Helper: fetches 7TV emotes for the SevenTVEmotes World of Warcraft addon"
 build = "build.rs"
@@ -19,7 +19,7 @@ required-features = ["native"]
 # "native" is the Windows helper app. Without it the crate is just the shared emote/texture code
 # (seventv, images, luasv, pack), which also compiles to WebAssembly for the web pack builder.
 default = ["native"]
-native = ["dep:ab_glyph", "dep:chrono", "dep:sysinfo", "dep:ureq"]
+native = ["dep:ab_glyph", "dep:chrono", "dep:sha2", "dep:sysinfo", "dep:ureq"]
 
 [dependencies]
 ab_glyph = { version = "0.2.32", optional = true }
@@ -29,6 +29,7 @@ indexmap = { version = "2", features = ["serde"] }
 log = { version = "0.4.35", features = ["std"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = { version = "1.0.154", features = ["preserve_order"] }
+sha2 = { version = "0.10.9", optional = true }
 sysinfo = { version = "0.40.4", default-features = false, features = ["system"], optional = true }
 ureq = { version = "3.5.2", optional = true }
 

@@ -28,6 +28,8 @@ pub mod service;
 #[cfg(feature = "native")]
 pub mod status_board;
 #[cfg(feature = "native")]
+pub mod updater;
+#[cfg(feature = "native")]
 pub mod wow;
 
 #[cfg(all(windows, feature = "native"))]

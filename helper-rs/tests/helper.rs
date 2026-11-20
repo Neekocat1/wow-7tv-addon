@@ -14,6 +14,7 @@ use seventv_helper::service::Service;
 use seventv_helper::seventv::{self, ApiError, ApiResult, Http};
 use seventv_helper::status_board as sb;
 use seventv_helper::testutil::TempDir;
+use seventv_helper::updater;
 use seventv_helper::wow::GameProc;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -51,6 +52,9 @@ struct FakeHttp {
     channel: Value,
     /// a second channel ("other") whose testerHi is a different emote than tester's
     other: Value,
+    /// GitHub: the latest release, and the exe it offers
+    release: Mutex<Option<Value>>,
+    release_exe: Mutex<Vec<u8>>,
 }
 
 impl FakeHttp {
@@ -98,6 +102,8 @@ impl FakeHttp {
             glob,
             channel,
             other,
+            release: Mutex::new(None),
+            release_exe: Mutex::new(Vec::new()),
         }
     }
 
@@ -117,6 +123,14 @@ impl FakeHttp {
 impl Http for FakeHttp {
     fn get_json(&self, url: &str) -> ApiResult<Value> {
         self.enter(url)?;
+        if url == updater::LATEST_URL {
+            return self
+                .release
+                .lock()
+                .unwrap()
+                .clone()
+                .ok_or(ApiError::NotFound(url.into()));
+        }
         if url.ends_with("/emote-sets/global") {
             return Ok(self.glob.clone());
         }
@@ -145,6 +159,9 @@ impl Http for FakeHttp {
 
     fn get_bytes(&self, url: &str) -> ApiResult<Vec<u8>> {
         self.enter(url)?;
+        if url.starts_with(updater::DOWNLOAD_PREFIX) {
+            return Ok(self.release_exe.lock().unwrap().clone());
+        }
         match self.files.get(url) {
             Some(p) => Ok(std::fs::read(p).unwrap()),
             None => Err(ApiError::NotFound(url.to_string())),
@@ -979,6 +996,184 @@ fn old_animations_are_rebuilt_into_new_slots() {
     // a pass with nothing to upgrade leaves it alone
     svc.run_once();
     assert_eq!(lib(&mut svc).state.images[ANIM].slot, info.slot);
+}
+
+// --------------------------------------------------------------------------- self-update
+
+/// A fake GitHub release of `version` offering `exe` (listed with `listed`'s size and SHA-256).
+fn publish(f: &Fake, version: &str, exe: &[u8], listed: &[u8]) {
+    let tag = format!("v{version}");
+    *f.http.release.lock().unwrap() = Some(json!({
+        "tag_name": tag, "draft": false, "prerelease": false,
+        "assets": [{
+            "name": updater::ASSET, "size": listed.len(),
+            "digest": format!("sha256:{}", updater::sha256_hex(listed)),
+            "browser_download_url": format!("{}{tag}/{}", updater::DOWNLOAD_PREFIX, updater::ASSET),
+        }],
+    }));
+    *f.http.release_exe.lock().unwrap() = exe.to_vec();
+}
+
+/// A service that may update itself (its exe is a file in the temp folder); notifications go
+/// into the returned list.
+fn updating_service(f: &Fake) -> (Service, PathBuf, Arc<Mutex<Vec<String>>>) {
+    let mut svc = make_service(f);
+    let exe = f.root.parent().unwrap().join(updater::ASSET);
+    std::fs::write(&exe, b"MZ the running helper").unwrap();
+    svc.exe = Some(exe.clone());
+    svc.shared.self_update.store(true, Ordering::SeqCst);
+    svc.takeover_wait = std::time::Duration::from_millis(300);
+    let said = Arc::new(Mutex::new(Vec::new()));
+    let s2 = said.clone();
+    *svc.shared.notify.lock().unwrap() =
+        Box::new(move |_, msg: &str| s2.lock().unwrap().push(msg.to_string()));
+    (svc, exe, said)
+}
+
+fn update_checks(f: &Fake) -> usize {
+    let calls = f.http.calls.lock().unwrap();
+    calls.iter().filter(|c| *c == updater::LATEST_URL).count()
+}
+
+#[test]
+fn helper_updates_itself_and_hands_over() {
+    let f = fake();
+    let (mut svc, exe, said) = updating_service(&f);
+    let new_exe = b"MZ the new helper".to_vec();
+    publish(&f, "99.0.0", &new_exe, &new_exe);
+    // the new helper, once started, asks this one to quit (instance::take_over)
+    let quit = f.paths.quit_file();
+    let started = Arc::new(Mutex::new(Vec::new()));
+    let s2 = started.clone();
+    svc.launch = Box::new(move |p: &Path| {
+        s2.lock().unwrap().push(std::fs::read(p).unwrap());
+        std::fs::write(&quit, "99.0.0")
+    });
+
+    // not before the first check is due
+    svc.maybe_update();
+    assert_eq!(update_checks(&f), 0);
+    // due, but WoW is open: wait for it to close
+    svc.next_update_check = 0.0;
+    f.procs
+        .lock()
+        .unwrap()
+        .push(wow_proc(1, "WowClassic.exe", now()));
+    svc.maybe_update();
+    assert_eq!(update_checks(&f), 1);
+    assert_eq!(std::fs::read(&exe).unwrap(), b"MZ the running helper");
+    f.procs.lock().unwrap().clear();
+    svc.next_update_check = 0.0;
+    svc.maybe_update();
+    assert_eq!(std::fs::read(&exe).unwrap(), new_exe, "swapped in");
+    assert_eq!(
+        started.lock().unwrap().as_slice(),
+        std::slice::from_ref(&new_exe),
+        "and started"
+    );
+    assert_eq!(
+        std::fs::read(updater::old_path(&exe)).unwrap(),
+        b"MZ the running helper"
+    );
+    // the next pass sees the quit request and stops
+    svc.tick();
+    assert!(svc.shared.stopped());
+    assert!(
+        said.lock().unwrap().is_empty(),
+        "{:?}",
+        said.lock().unwrap()
+    );
+}
+
+#[test]
+fn helper_update_checks_the_download() {
+    let f = fake();
+    let (mut svc, exe, said) = updating_service(&f);
+    publish(&f, "99.0.0", b"MZ tampered", b"MZ the real one");
+    svc.launch = Box::new(|_: &Path| panic!("must not start an unchecked download"));
+    svc.shared.request_update_check();
+    svc.maybe_update();
+    assert_eq!(std::fs::read(&exe).unwrap(), b"MZ the running helper");
+    assert!(!updater::old_path(&exe).exists() && !updater::new_path(&exe).exists());
+    let msg = said.lock().unwrap().join(" ");
+    assert!(
+        msg.contains("Couldn't update the helper to 99.0.0"),
+        "{msg}"
+    );
+    // not retried automatically this run
+    svc.next_update_check = 0.0;
+    svc.maybe_update();
+    assert_eq!(std::fs::read(&exe).unwrap(), b"MZ the running helper");
+}
+
+#[test]
+fn helper_update_that_doesnt_start_is_rolled_back() {
+    let f = fake();
+    let (mut svc, exe, said) = updating_service(&f);
+    let new_exe = b"MZ a broken helper".to_vec();
+    publish(&f, "99.0.0", &new_exe, &new_exe);
+    svc.launch = Box::new(|_: &Path| Ok(())); // starts, but never takes over
+    svc.next_update_check = 0.0;
+    svc.maybe_update();
+    assert_eq!(
+        std::fs::read(&exe).unwrap(),
+        b"MZ the running helper",
+        "rolled back"
+    );
+    assert!(!updater::old_path(&exe).exists() && !updater::new_path(&exe).exists());
+    assert_eq!(svc.config.skip_update.as_deref(), Some("99.0.0"));
+    assert!(said.lock().unwrap().join(" ").contains("didn't start"));
+    // skipped from now on, unless asked for
+    svc.next_update_check = 0.0;
+    svc.maybe_update();
+    assert_eq!(std::fs::read(&exe).unwrap(), b"MZ the running helper");
+    assert_eq!(
+        Config::load(&f.paths).skip_update.as_deref(),
+        Some("99.0.0"),
+        "remembered"
+    );
+}
+
+#[test]
+fn helper_update_settings_and_manual_checks() {
+    let f = fake();
+    let (mut svc, exe, said) = updating_service(&f);
+    // up to date
+    publish(&f, seventv_helper::VERSION, b"MZ same", b"MZ same");
+    svc.shared.request_update_check();
+    svc.maybe_update();
+    assert!(
+        said.lock()
+            .unwrap()
+            .last()
+            .unwrap()
+            .contains("You have the latest helper")
+    );
+    // "Update automatically" off: no automatic checks (saved), but the tray's check still works
+    svc.shared.auto_update.store(false, Ordering::SeqCst);
+    svc.next_update_check = 0.0;
+    let before = update_checks(&f);
+    svc.maybe_update();
+    assert_eq!(update_checks(&f), before);
+    assert!(!Config::load(&f.paths).auto_update);
+    let new_exe = b"MZ newer".to_vec();
+    publish(&f, "99.0.0", &new_exe, &new_exe);
+    let quit = f.paths.quit_file();
+    svc.launch = Box::new(move |_: &Path| std::fs::write(&quit, "99.0.0"));
+    f.procs
+        .lock()
+        .unwrap()
+        .push(wow_proc(1, "WowClassic.exe", now())); // even with WoW open
+    svc.shared.request_update_check();
+    svc.maybe_update();
+    assert_eq!(std::fs::read(&exe).unwrap(), new_exe);
+    // console runs never update
+    let mut console = make_service(&f);
+    console.exe = Some(exe);
+    console.next_update_check = 0.0;
+    let before = update_checks(&f);
+    console.maybe_update();
+    assert_eq!(update_checks(&f), before);
 }
 
 #[test]

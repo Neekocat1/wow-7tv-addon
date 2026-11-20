@@ -73,6 +73,7 @@ cd .. && lua tests/test_addon.lua %TEMP%\Local.lua && lua tests/test_ui.lua %TEM
 | `wow.rs` | `wow.py` | finding WoW, game process (sysinfo) |
 | `instance.rs` | `instance.py` | single instance, hand-over |
 | `installer.rs` | `installer.py` | addon install, autostart |
+| `updater.rs` | (new) | updating itself from GitHub releases |
 | `tray.rs`, `win.rs` | `tray.py`, dialogs | native Win32 tray, message boxes, folder picker, registry |
 | `main.rs` | `__main__.py` | flags, first run |
 

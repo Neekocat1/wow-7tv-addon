@@ -170,7 +170,7 @@ do
     advance()
     check(line.text ~= before, "chat emotes animate")
     ns.OnHyperlinkEnter(cf, "addon:SevenTVEmotes:" .. e.id)
-    check(GameTooltip.owner == cf and ns.tooltipEmote == e, "hover shows the emote tooltip")
+    check(GameTooltip.owner == cf and ns.tooltipEmote and ns.tooltipEmote.id == e.id, "hover shows the emote tooltip")
     before = line.text
     advance(); advance()
     check(line.text == before, "the hovered chat frame isn't rewritten")

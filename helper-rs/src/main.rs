@@ -8,6 +8,7 @@
 //! ... --wow-dir "D:/Games/World of Warcraft"   if WoW isn't found automatically
 //! ... --flavor _retail_              also manage another game folder
 //! ... --autostart on|off
+//! ... --updated                      started by an older helper that just updated itself
 //! ```
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -28,9 +29,10 @@ struct Args {
     wow_dir: Vec<String>,
     flavor: Vec<String>,
     autostart: Option<bool>,
+    updated: bool,
 }
 
-const USAGE: &str = "usage: SevenTVEmotesHelper [--background] [--no-tray] [--once] [--wow-dir DIR]... [--flavor NAME]... [--autostart on|off] [--version]";
+const USAGE: &str = "usage: SevenTVEmotesHelper [--background] [--no-tray] [--once] [--wow-dir DIR]... [--flavor NAME]... [--autostart on|off] [--updated] [--version]";
 
 fn parse_args() -> Result<Args, String> {
     let mut a = Args::default();
@@ -50,6 +52,7 @@ fn parse_args() -> Result<Args, String> {
             "--background" => a.background = true,
             "--no-tray" => a.no_tray = true,
             "--once" => a.once = true,
+            "--updated" => a.updated = true,
             "--wow-dir" => a.wow_dir.push(value("--wow-dir")?),
             "--flavor" => a.flavor.push(value("--flavor")?),
             "--autostart" => match value("--autostart")?.as_str() {
@@ -232,6 +235,19 @@ fn main() {
 
     #[cfg(windows)]
     if !args.no_tray {
+        // Updates from GitHub releases (see updater.rs), for the tray app only.
+        if let Ok(exe) = std::env::current_exe() {
+            let exe = seventv_helper::wow::resolve(&exe).unwrap_or(exe);
+            let leftovers = exe.clone();
+            std::thread::spawn(move || seventv_helper::updater::clean_up(&leftovers));
+            service.exe = Some(exe);
+            service.update_http = Arc::new(UreqHttp::with_timeout(600, "GitHub"));
+            service
+                .shared
+                .self_update
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        service.just_updated = args.updated;
         seventv_helper::tray::run_tray(service);
         return;
     }

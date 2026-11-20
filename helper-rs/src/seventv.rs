@@ -62,6 +62,8 @@ pub struct Emote {
 pub struct UreqHttp {
     agent: ureq::Agent,
     retries: u32,
+    /// who's being reached, for error messages
+    site: &'static str,
 }
 
 #[cfg(feature = "native")]
@@ -74,12 +76,21 @@ impl Default for UreqHttp {
 #[cfg(feature = "native")]
 impl UreqHttp {
     pub fn new() -> Self {
+        Self::with_timeout(30, "7TV")
+    }
+
+    /// `secs`: how long one request may take in all (downloads of big files need longer).
+    pub fn with_timeout(secs: u64, site: &'static str) -> Self {
         let agent: ureq::Agent = ureq::Agent::config_builder()
-            .timeout_global(Some(Duration::from_secs(30)))
+            .timeout_global(Some(Duration::from_secs(secs)))
             .user_agent(USER_AGENT)
             .build()
             .into();
-        Self { agent, retries: 3 }
+        Self {
+            agent,
+            retries: 3,
+            site,
+        }
     }
 
     /// GET (or POST JSON when `body` is given). NotFound on 400/404; Network after retries.
@@ -111,7 +122,10 @@ impl UreqHttp {
             }
             std::thread::sleep(Duration::from_millis(1500 * (attempt as u64 + 1)));
         }
-        Err(ApiError::Network(format!("Couldn't reach 7TV ({last})")))
+        Err(ApiError::Network(format!(
+            "Couldn't reach {} ({last})",
+            self.site
+        )))
     }
 
     fn json(&self, url: &str, body: Option<&Value>) -> ApiResult<Value> {
@@ -124,7 +138,10 @@ impl UreqHttp {
                 Err(e) => last = e.to_string(),
             }
         }
-        Err(ApiError::Network(format!("Couldn't reach 7TV ({last})")))
+        Err(ApiError::Network(format!(
+            "Couldn't reach {} ({last})",
+            self.site
+        )))
     }
 }
 

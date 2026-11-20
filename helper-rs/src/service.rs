@@ -7,6 +7,7 @@ use crate::luasv::{self, Value as Lua};
 use crate::now;
 use crate::paths::{AppPaths, Config, file_mtime};
 use crate::seventv::Http;
+use crate::updater;
 use crate::wow::{self, ProcessSource};
 use indexmap::IndexMap;
 use std::collections::{HashMap, HashSet};
@@ -24,6 +25,8 @@ pub const MAX_ATTEMPTS: u32 = 3;
 type Hook = Box<dyn Fn() + Send + Sync>;
 type NotifyHook = Box<dyn Fn(&str, &str) + Send + Sync>;
 type StatusHook = Box<dyn Fn(&str) + Send + Sync>;
+/// Starts the new helper after a self-update (see `updater::launch`).
+pub type Launcher = Box<dyn Fn(&Path) -> std::io::Result<()> + Send>;
 
 /// What the tray (UI thread) and the service thread share.
 pub struct Shared {
@@ -35,6 +38,11 @@ pub struct Shared {
     pub notify: Mutex<NotifyHook>,
     pub on_status: Mutex<StatusHook>,
     pub on_quit: Mutex<Hook>,
+    /// Whether this helper may update itself at all (the installed tray app, not console runs).
+    pub self_update: AtomicBool,
+    /// The tray's "Update automatically" (the service saves it in the config).
+    pub auto_update: AtomicBool,
+    check_update: AtomicBool,
 }
 
 impl Default for Shared {
@@ -44,6 +52,9 @@ impl Default for Shared {
             lib_dirs: Mutex::new(Vec::new()),
             stop: AtomicBool::new(false),
             force_refresh: AtomicBool::new(false),
+            self_update: AtomicBool::new(false),
+            auto_update: AtomicBool::new(true),
+            check_update: AtomicBool::new(false),
             wake: (Mutex::new(false), Condvar::new()),
             notify: Mutex::new(Box::new(|_, _| {})),
             on_status: Mutex::new(Box::new(|_| {})),
@@ -62,6 +73,11 @@ impl Shared {
     }
     pub fn request_refresh(&self) {
         self.force_refresh.store(true, Ordering::SeqCst);
+        self.wake_up();
+    }
+    /// The tray's "Check for a helper update now": installs a newer helper even while WoW is open.
+    pub fn request_update_check(&self) {
+        self.check_update.store(true, Ordering::SeqCst);
         self.wake_up();
     }
     fn wake_up(&self) {
@@ -173,6 +189,16 @@ pub struct Service {
     last_discover: f64,
     last_game: Option<String>,
     last_gs: LastGs,
+    /// For self-updates (see `updater`): the exe to replace, how to download (with a long timeout),
+    /// and how to start the new helper (tests replace these).
+    pub exe: Option<PathBuf>,
+    pub update_http: Arc<dyn Http>,
+    pub launch: Launcher,
+    pub takeover_wait: Duration,
+    pub next_update_check: f64,
+    failed_update: Option<String>,
+    /// Started by an older helper that updated itself (says so once the tray is up).
+    pub just_updated: bool,
 }
 
 impl Service {
@@ -182,13 +208,19 @@ impl Service {
         http: Arc<dyn Http>,
         procs: Box<dyn ProcessSource>,
     ) -> Self {
+        let shared = Arc::new(Shared::default());
+        shared
+            .auto_update
+            .store(config.auto_update, Ordering::SeqCst);
+        let t = now();
         Self {
             config,
             paths,
-            shared: Arc::new(Shared::default()),
+            shared,
+            update_http: http.clone(),
             http,
             procs,
-            helper_start: now(),
+            helper_start: t,
             roots: Vec::new(),
             libs: IndexMap::new(),
             sv_mtimes: HashMap::new(),
@@ -198,6 +230,12 @@ impl Service {
             last_discover: 0.0,
             last_game: None,
             last_gs: LastGs::Unset,
+            exe: None,
+            launch: Box::new(|exe: &Path| updater::launch(exe)),
+            takeover_wait: Duration::from_secs(updater::TAKEOVER_SECONDS),
+            next_update_check: t + updater::FIRST_CHECK_SECONDS,
+            failed_update: None,
+            just_updated: false,
         }
     }
 
@@ -282,6 +320,12 @@ impl Service {
     // ------------------------------------------------------------------ main loop
 
     pub fn run(&mut self) {
+        if self.just_updated {
+            self.shared.notify(
+                "7TV Emotes Helper",
+                &format!("Updated to {}.", crate::VERSION),
+            );
+        }
         let changes = self.discover();
         if !changes.is_empty() {
             self.shared.notify(
@@ -307,6 +351,10 @@ impl Service {
             log::info!("a newer helper asked this one to quit");
             self.shared.stop();
             (self.shared.on_quit.lock().unwrap())();
+            return;
+        }
+        self.maybe_update();
+        if self.shared.stopped() {
             return;
         }
         let t = now();
@@ -348,6 +396,132 @@ impl Service {
                 if open { " (WoW open)" } else { "" }
             ),
             true,
+        );
+    }
+
+    // ------------------------------------------------------------------ updating the helper
+
+    fn game_running(&mut self) -> bool {
+        matches!(self.procs.game_processes(&self.roots), Some(p) if !p.is_empty())
+    }
+
+    /// Look for a newer helper on GitHub when it's time (or the tray asked), and install it.
+    pub fn maybe_update(&mut self) {
+        if !self.shared.self_update.load(Ordering::SeqCst) {
+            return;
+        }
+        let Some(exe) = self.exe.clone() else {
+            return;
+        };
+        let auto = self.shared.auto_update.load(Ordering::SeqCst);
+        if auto != self.config.auto_update {
+            self.config.auto_update = auto;
+            let _ = self.config.save(&self.paths);
+        }
+        let manual = self.shared.check_update.swap(false, Ordering::SeqCst);
+        let t = now();
+        if !manual && (!auto || t < self.next_update_check) {
+            return;
+        }
+        self.next_update_check = t + updater::CHECK_SECONDS;
+        let rel = match updater::check(&*self.update_http, crate::VERSION) {
+            Ok(Some(rel)) => rel,
+            Ok(None) => {
+                log::info!("the helper is up to date ({})", crate::VERSION);
+                if manual {
+                    self.shared.notify(
+                        "7TV Emotes Helper",
+                        &format!("You have the latest helper ({}).", crate::VERSION),
+                    );
+                }
+                return;
+            }
+            Err(e) => {
+                log::warn!("couldn't check for a helper update: {e}");
+                if manual {
+                    self.shared.notify(
+                        "7TV Emotes Helper",
+                        &format!("Couldn't check for an update: {e}"),
+                    );
+                }
+                return;
+            }
+        };
+        if !manual {
+            let v = Some(rel.version.as_str());
+            if self.config.skip_update.as_deref() == v || self.failed_update.as_deref() == v {
+                log::info!(
+                    "helper {} is out, but it didn't install before; skipping it",
+                    rel.version
+                );
+                return;
+            }
+            if self.game_running() {
+                log::info!(
+                    "helper {} is out; installing it once WoW closes",
+                    rel.version
+                );
+                self.next_update_check = t + updater::WAIT_FOR_GAME_SECONDS;
+                return;
+            }
+        }
+        self.install_update(&exe, &rel);
+    }
+
+    fn install_update(&mut self, exe: &Path, rel: &updater::Release) {
+        let v = &rel.version;
+        log::info!("updating the helper to {v} from {}", rel.url);
+        self.set_status(&format!("Updating the helper to {v}..."), true);
+        let installed = (|| {
+            let data = self
+                .update_http
+                .get_bytes(&rel.url)
+                .map_err(|e| format!("couldn't download it ({e})"))?;
+            updater::verify(rel, &data)?;
+            updater::swap_in(exe, &data)?;
+            if let Err(e) = (self.launch)(exe) {
+                let _ = updater::roll_back(exe);
+                return Err(format!("couldn't start it ({e})"));
+            }
+            Ok(())
+        })();
+        if let Err(e) = installed {
+            log::warn!("couldn't update the helper to {v}: {e}");
+            self.failed_update = Some(v.clone());
+            self.shared.notify(
+                "7TV Emotes Helper",
+                &format!(
+                    "Couldn't update the helper to {v}: {e}. You can download it from {}",
+                    updater::RELEASES_PAGE
+                ),
+            );
+            return;
+        }
+        // The new helper asks this one to quit when it takes over (see instance::take_over).
+        let deadline = std::time::Instant::now() + self.takeover_wait;
+        while std::time::Instant::now() < deadline {
+            if instance::quit_requested(&self.paths) {
+                log::info!("helper {v} started; handing over to it");
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        log::warn!(
+            "helper {v} didn't take over in time; going back to {}",
+            crate::VERSION
+        );
+        if let Err(e) = updater::roll_back(exe) {
+            log::error!("couldn't put the previous helper back: {e}");
+        }
+        self.config.skip_update = Some(v.clone());
+        let _ = self.config.save(&self.paths);
+        self.shared.notify(
+            "7TV Emotes Helper",
+            &format!(
+                "Helper {v} didn't start, so you're staying on {}. You can try it from {}",
+                crate::VERSION,
+                updater::RELEASES_PAGE
+            ),
         );
     }
 

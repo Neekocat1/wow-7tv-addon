@@ -182,20 +182,41 @@ pub fn fit(w: u32, h: u32, size: u32, max_ratio: f64) -> (u32, u32) {
 
 /// Resample an animation onto evenly spaced frames, since the addon shows every frame for the same
 /// time. `step` is the wanted time per frame in ms; the result's frames each last `total / n` ms
-/// (the returned value), so the animation keeps its length and its pauses.
+/// (the returned value), so the animation keeps its length and its pauses. Each new frame shows
+/// the original frame that covers most of its time (the earlier one on a tie), and an animation
+/// keeps at least two frames.
 pub fn retime<T: Clone>(frames: &[T], durations: &[u32], step: f64) -> (Vec<T>, f64) {
     let total: f64 = durations.iter().map(|&d| d as f64).sum::<f64>().max(1.0);
-    let n = ((total / step.max(1.0)).round() as usize).max(1);
+    let mut n = ((total / step.max(1.0)).round() as usize).max(1);
+    if frames.len() > 1 {
+        n = n.max(2);
+    }
     let each = total / n as f64;
+    // when each original frame starts
+    let mut starts = Vec::with_capacity(frames.len() + 1);
+    let mut t = 0.0;
+    for &d in durations {
+        starts.push(t);
+        t += d as f64;
+    }
+    starts.push(t);
     let mut out = Vec::with_capacity(n);
-    let (mut idx, mut end) = (0, durations[0] as f64);
+    let mut first = 0; // first original frame that may overlap the current new frame
     for i in 0..n {
-        let t = (i as f64 + 1e-6) * each; // the start of output frame i (past rounding errors)
-        while t >= end && idx + 1 < frames.len() {
-            idx += 1;
-            end += durations[idx] as f64;
+        let (a, b) = (i as f64 * each, (i + 1) as f64 * each);
+        while first + 1 < frames.len() && starts[first + 1] <= a {
+            first += 1;
         }
-        out.push(frames[idx].clone());
+        let (mut best, mut most) = (first, -1.0);
+        let mut j = first;
+        while j < frames.len() && starts[j] < b {
+            let overlap = starts[j + 1].min(b) - starts[j].max(a);
+            if overlap > most + 1e-9 {
+                (best, most) = (j, overlap);
+            }
+            j += 1;
+        }
+        out.push(frames[best].clone());
     }
     (out, each)
 }
@@ -694,9 +715,10 @@ pub struct RenderOptions {
 
 /// Bumped when animated emotes come out differently enough to be worth rebuilding (the helper
 /// re-renders textures made by an older version; see `ImageInfo::anim`).
-/// 2: resampled to keep the original speed (up to 30 fps) and timing; before, at most 48 frames
-/// with the average frame time.
-pub const ANIM_VERSION: u32 = 2;
+/// 2 (0.7.1): resampled to keep the original speed (up to 30 fps) and timing; before, at most 48
+/// frames with the average frame time.
+/// 3 (0.7.2): fixed resampling that could repeat a frame in place of the next (Clap didn't move).
+pub const ANIM_VERSION: u32 = 3;
 
 impl Default for RenderOptions {
     fn default() -> Self {
@@ -855,6 +877,16 @@ mod tests {
         // a 300 ms hold on frame 1 stays a 300 ms hold
         let (f, each) = retime(&[0, 1, 2], &[100, 300, 100], 100.0);
         assert_eq!((f, each), (vec![0, 1, 1, 1, 2], 100.0));
+        // 7TV's Clap: 200 + 190 ms becomes two 195 ms frames, still two different pictures
+        // (0.7.1 sampled each new frame at its start and showed the first picture twice)
+        let (f, each) = retime(&[0, 1], &[200, 190], 190.0);
+        assert_eq!((f, each), (vec![0, 1], 195.0));
+        // a two-frame flicker faster than the step still animates
+        let (f, _) = retime(&[0, 1], &[20, 20], 1000.0 / 30.0);
+        assert_eq!(f, vec![0, 1]);
+        // uneven frames: each original frame shows where it covers most of a new frame
+        let (f, each) = retime(&[0, 1, 2, 3, 4], &[100, 30, 50, 70, 90], 1000.0 / 30.0);
+        assert_eq!((f, each), (vec![0, 0, 0, 1, 2, 3, 3, 4, 4, 4], 34.0));
     }
 
     #[test]
